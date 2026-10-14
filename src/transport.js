@@ -20,6 +20,11 @@
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
   };
 
+  const sess = {
+    get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+  };
+
   class Emitter {
     constructor() { this.subs = new Set(); this.state = null; this.online = new Set(); this.onlineSubs = new Set(); }
     onState(cb) { this.subs.add(cb); if (this.state) cb(this.state); return () => this.subs.delete(cb); }
@@ -144,14 +149,19 @@
     return peerLib;
   }
   const PEER_PREFIX = 'chipstack-v1-';
+  // tests can point at a local PeerJS server via window.CHIPSTACK_PEER_OPTIONS
+  const peerOpts = () => Object.assign({ debug: 0 }, root.CHIPSTACK_PEER_OPTIONS || {});
 
   class PeerBackend extends Emitter {
     constructor() {
       super();
       this.kind = 'peer';
-      let id = store.get('chipstack:pid');
-      if (!id) { id = 'p' + rid(); store.set('chipstack:pid', id); }
-      this.me = { id };
+      // One identity per browser TAB (sessionStorage survives refresh), so two tabs or two
+      // friends on one browser get separate seats. The host hands out the final id on join.
+      this.tab = sess.get('chipstack:tab') || rid();
+      sess.set('chipstack:tab', this.tab);
+      this.me = { id: sess.get('chipstack:pid') || ('p' + rid()) };
+      sess.set('chipstack:pid', this.me.id);
       this.pending = new Map();
       this.conns = new Set();
     }
@@ -173,7 +183,7 @@
       this.close();
       this.code = code; this.isHost = true;
       return new Promise((res, rej) => {
-        const peer = new root.Peer(PEER_PREFIX + code, { debug: 0 });
+        const peer = new root.Peer(PEER_PREFIX + code, peerOpts());
         this.peer = peer;
         let opened = false;
         peer.on('open', () => {
@@ -191,14 +201,28 @@
         });
         peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
         peer.on('connection', (conn) => {
-          conn.on('open', () => { this.conns.add(conn); conn.send({ t: 'state', state: this.state }); this.updateOnline(); });
+          conn.on('open', () => { this.conns.add(conn); });
           conn.on('close', () => { this.conns.delete(conn); this.updateOnline(); });
           conn.on('data', (msg) => {
-            if (!msg || msg.t !== 'act') return;
-            conn.pid = msg.action && msg.action.by;
-            this.updateOnline();
+            if (!msg) return;
+            if (msg.t === 'hello') {
+              const want = typeof msg.pid === 'string' && /^p[a-z0-9]{6,30}$/.test(msg.pid) ? msg.pid : null;
+              let id = want;
+              if (!id || id === this.me.id) id = 'p' + rid();
+              for (const c of this.conns) {
+                if (c === conn || c.pid !== id) continue;
+                if (c.tab && c.tab === msg.tab) { try { c.close(); } catch (e) { /* stale link from the same tab */ } }
+                else id = 'p' + rid(); // another phone already uses this id
+              }
+              conn.pid = id; conn.tab = msg.tab;
+              conn.send({ t: 'welcome', pid: id });
+              conn.send({ t: 'state', state: this.state });
+              this.updateOnline();
+              return;
+            }
+            if (msg.t !== 'act' || !conn.pid) return;
             try {
-              const next = E.reduce(this.state, msg.action);
+              const next = E.reduce(this.state, { ...msg.action, by: conn.pid });
               this.apply(next);
               conn.send({ t: 'ok', rid: msg.rid });
             } catch (e) { conn.send({ t: 'err', rid: msg.rid, msg: e.message }); }
@@ -226,8 +250,11 @@
     async open(code) {
       const saved = store.get('chipstack:host:' + code);
       if (saved) {
-        try { return await this.host(code, JSON.parse(saved)); }
-        catch (e) { if (!/taken/.test(e.message)) throw e; /* someone else hosts it now: join as guest */ }
+        const st = JSON.parse(saved);
+        const prevId = this.me.id;
+        if (st.hostId) { this.me.id = st.hostId; sess.set('chipstack:pid', st.hostId); }
+        try { return await this.host(code, st); }
+        catch (e) { this.me.id = prevId; sess.set('chipstack:pid', prevId); if (!/taken/.test(e.message)) throw e; }
       }
       return this.join(code);
     }
@@ -235,15 +262,25 @@
       this.close();
       this.code = code; this.isHost = false;
       return new Promise((res, rej) => {
-        const peer = new root.Peer({ debug: 0 });
+        const peer = new root.Peer(peerOpts());
         this.peer = peer;
         let settled = false;
         const connect = () => {
           const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
           this.conn = conn;
-          conn.on('open', () => { this.setOnline(new Set([this.me.id])); });
+          conn.on('open', () => {
+            const seat = store.get('chipstack:seat:' + code);
+            conn.send({ t: 'hello', pid: seat || this.me.id, tab: this.tab });
+          });
           conn.on('data', (msg) => {
             if (!msg) return;
+            if (msg.t === 'welcome') {
+              this.me.id = msg.pid;
+              sess.set('chipstack:pid', msg.pid);
+              store.set('chipstack:seat:' + code, msg.pid);
+              this.setOnline(new Set([this.me.id]));
+              return;
+            }
             if (msg.t === 'state') { this.push(msg.state); if (!settled) { settled = true; res(code); } }
             else if (msg.t === 'ok' || msg.t === 'err') {
               const p = this.pending.get(msg.rid);
@@ -259,6 +296,12 @@
           });
         };
         peer.on('open', connect);
+        setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          rej(new Error("Couldn't reach the host's phone. Check the code, make sure the host has the app open, or try joining the same Wi-Fi."));
+          this.close();
+        }, 20000);
         peer.on('error', (err) => {
           if (err.type === 'peer-unavailable') {
             if (!settled) { settled = true; rej(new Error(`No table with code ${code} is open. The host's phone needs the app open.`)); }
