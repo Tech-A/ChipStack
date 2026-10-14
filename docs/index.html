@@ -1,0 +1,1666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d3a31">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>html{-webkit-text-size-adjust:100%}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>ChipStack</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Virtual poker chips for real-card Texas Hold'em nights">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one-screen app. Felt table on top (pot + seats), a walnut "rail" dock at the bottom holds your chips and actions.
+   Single deliberate look: dark felt, in both host themes. */
+:root {
+  color-scheme: dark;
+  --felt: #0d3a31;
+  --felt-hi: #15503f;
+  --felt-lo: #082a23;
+  --rail: #24170f;
+  --rail-hi: #3a271a;
+  --bone: #f2ecdc;
+  --muted: #a7c2b6;
+  --faint: rgba(242, 236, 220, .12);
+  --brass: #e2ac4a;
+  --brass-ink: #2b1a05;
+  --red: #e0573f;
+  --ok: #7fd3a0;
+  --chip-1: #f2ecdc; --chip-1-ink: #2a2a2a;
+  --chip-2: #c8372d; --chip-2-ink: #fff;
+  --chip-3: #2c62c9; --chip-3-ink: #fff;
+  --chip-4: #1f8a4c; --chip-4-ink: #fff;
+  --chip-5: #1b1b1f; --chip-5-ink: #f2ecdc;
+  --chip-6: #7b3fb3; --chip-6-ink: #fff;
+  --display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+  --body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r: 14px;
+}
+html, body { height: 100%; }
+body {
+  background: radial-gradient(120% 80% at 50% 0%, var(--felt-hi), var(--felt) 55%, var(--felt-lo));
+  background-color: var(--felt);
+  color: var(--bone);
+  font: 15px/1.4 var(--body);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+
+#app { height: 100%; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; }
+
+/* ---------- home ---------- */
+.home { flex: 1; overflow-y: auto; padding-block: 28px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 22px; align-content: start; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand h1 { font: 900 52px/0.9 var(--display); letter-spacing: .5px; margin: 0; text-transform: uppercase; }
+.brand p { margin: 4px 0 0; color: var(--muted); max-width: 30ch; }
+.panel { background: rgba(0,0,0,.22); border: 1px solid var(--faint); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; }
+.panel h2 { font: 800 22px/1 var(--display); text-transform: uppercase; letter-spacing: 1px; margin: 0; }
+.field { display: grid; gap: 5px; }
+.field label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.field input { background: var(--felt-lo); border: 1px solid var(--faint); border-radius: 10px; padding: 12px; font-size: 17px; min-width: 0; width: 100%; box-sizing: border-box; }
+.field input.code { font: 800 28px/1 var(--display); letter-spacing: .3em; text-transform: uppercase; text-align: center; }
+.row3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+.btn { border: 0; border-radius: 12px; padding: 14px 16px; font-weight: 700; font-size: 16px; background: var(--faint); min-height: 48px; }
+.btn.primary { background: var(--brass); color: var(--brass-ink); }
+.btn.danger { background: var(--red); color: #fff; }
+.btn.ghost { background: transparent; border: 1px solid var(--faint); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.small { min-height: 36px; padding: 8px 12px; font-size: 14px; }
+.link { background: none; border: 0; color: var(--muted); text-decoration: underline; padding: 6px 0; text-align: left; }
+.note { color: var(--muted); font-size: 13px; }
+.err { color: #ffb4a6; font-size: 14px; min-height: 1em; }
+
+/* ---------- table ---------- */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); display: flex; align-items: center; gap: 10px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.codepill { font: 800 20px/1 var(--display); letter-spacing: .22em; background: rgba(0,0,0,.28); border: 1px dashed rgba(242,236,220,.3); border-radius: 999px; padding: 8px 12px 8px 14px; }
+.top .meta { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; line-height: 1.2; }
+.top .meta b { color: var(--bone); font-weight: 600; }
+.iconbtn { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--faint); background: rgba(0,0,0,.2); display: grid; place-items: center; }
+.iconbtn svg { width: 22px; height: 22px; }
+
+.scroll { flex: 1; overflow-y: auto; padding-bottom: 12px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+.potzone { position: relative; margin: 2px 0 14px; padding: 16px 14px 14px; border-radius: 999px / 70%; border: 2px solid rgba(242,236,220,.16); box-shadow: inset 0 0 0 6px rgba(0,0,0,.08); text-align: center; display: grid; gap: 6px; justify-items: center; }
+.potzone .label { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+.potzone .amt { font: 900 54px/0.9 var(--display); }
+.potzone .side { font-size: 13px; color: var(--muted); }
+.streets { display: flex; gap: 6px; align-items: center; }
+.streets span { font: 800 12px/1 var(--display); letter-spacing: .14em; padding: 5px 8px; border-radius: 6px; color: var(--muted); border: 1px solid var(--faint); }
+.streets span.on { background: var(--bone); color: var(--felt); border-color: var(--bone); }
+.streets span.done { color: var(--bone); }
+.hint { font-weight: 600; color: var(--brass); font-size: 14px; }
+.potzone.drop-ready { border-color: var(--brass); }
+
+.seats { display: grid; gap: 8px; }
+.seat { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: rgba(0,0,0,.18); border: 1px solid transparent; text-align: left; width: 100%; }
+.seat.turn { border-color: var(--brass); background: rgba(226,172,74,.12); }
+.seat.folded { opacity: .45; }
+.seat.out { opacity: .55; }
+.seat .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat .sub { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.seat .stack { font: 800 22px/1 var(--display); text-align: right; }
+.seat .bet { display: flex; align-items: center; gap: 6px; justify-content: flex-end; font-size: 13px; color: var(--brass); font-weight: 600; margin-top: 3px; }
+.tokens { display: flex; gap: 4px; width: 52px; flex-wrap: wrap; }
+.tok { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font: 800 12px/1 var(--display); }
+.tok.d { background: var(--bone); color: #111; }
+.tok.sb { background: #5b8fe0; color: #fff; font-size: 10px; }
+.tok.bb { background: #e9c25a; color: #2b1a05; font-size: 10px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(242,236,220,.25); display: inline-block; }
+.dot.on { background: var(--ok); }
+.tag { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 2px 6px; border-radius: 5px; background: var(--faint); color: var(--bone); }
+.tag.you { background: var(--bone); color: var(--felt); }
+.tag.allin { background: var(--red); color: #fff; }
+
+/* chips */
+.chip { --c: var(--chip-1); --ink: var(--chip-1-ink); width: 54px; height: 54px; border-radius: 50%; position: relative; flex: none; border: 0; padding: 0;
+  background:
+    radial-gradient(circle at 50% 50%, var(--c) 0 55%, transparent 56%),
+    repeating-conic-gradient(from 8deg, var(--c) 0 22deg, var(--bone) 22deg 38deg);
+  box-shadow: 0 3px 0 rgba(0,0,0,.35), inset 0 0 0 2px rgba(0,0,0,.18);
+  color: var(--ink); font: 800 15px/1 var(--display); display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; }
+.chip::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; border: 2px dashed rgba(255,255,255,.45); pointer-events: none; }
+.chip.c1::after { border-color: rgba(0,0,0,.25); }
+.chip.c1 { --c: var(--chip-1); --ink: var(--chip-1-ink); }
+.chip.c2 { --c: var(--chip-2); --ink: var(--chip-2-ink); }
+.chip.c3 { --c: var(--chip-3); --ink: var(--chip-3-ink); }
+.chip.c4 { --c: var(--chip-4); --ink: var(--chip-4-ink); }
+.chip.c5 { --c: var(--chip-5); --ink: var(--chip-5-ink); }
+.chip.c6 { --c: var(--chip-6); --ink: var(--chip-6-ink); }
+.chip:disabled { opacity: .35; }
+.chip.mini { width: 18px; height: 18px; box-shadow: 0 1px 0 rgba(0,0,0,.4); font-size: 0; }
+.chip.mini::after { inset: 3px; border-width: 1px; }
+.pile { display: flex; align-items: flex-end; gap: 4px; min-height: 18px; }
+.pile .col { display: flex; flex-direction: column-reverse; }
+.pile .col .chip.mini + .chip.mini { margin-bottom: -14px; }
+.dragghost { position: fixed; z-index: 50; pointer-events: none; transform: translate(-50%, -50%) scale(1.15); }
+
+/* dock */
+.dock { background: linear-gradient(var(--rail-hi), var(--rail)); border-top: 1px solid rgba(255,255,255,.08); border-radius: 18px 18px 0 0; padding-block: 12px calc(12px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 10px; box-shadow: 0 -8px 24px rgba(0,0,0,.3); }
+.dockhead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.dockhead .who { font-weight: 600; }
+.dockhead .mystack { font: 800 26px/1 var(--display); }
+.dockhead .mystack small { font: 500 12px var(--body); color: var(--muted); margin-right: 6px; }
+.betline { border: 2px dashed rgba(242,236,220,.25); border-radius: 12px; min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; }
+.betline.over { border-color: var(--brass); background: rgba(226,172,74,.1); }
+.betline .amt { font: 900 34px/1 var(--display); }
+.betline .amt small { font: 500 12px var(--body); color: var(--muted); display: block; letter-spacing: .04em; }
+.rack { display: flex; justify-content: space-between; gap: 6px; }
+.quick { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+.quick button { background: rgba(0,0,0,.25); border: 1px solid var(--faint); border-radius: 10px; padding: 8px 4px; font-size: 13px; font-weight: 600; }
+.acts { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 8px; }
+.acts .btn { padding: 12px 6px; }
+.waiting { text-align: center; color: var(--muted); padding: 6px 0; }
+.waiting b { color: var(--bone); }
+
+.pots { display: grid; gap: 12px; }
+.potpick { display: grid; gap: 8px; }
+.potpick .h { display: flex; justify-content: space-between; font-weight: 600; }
+.pickrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.pick { border: 1px solid var(--faint); background: rgba(0,0,0,.25); border-radius: 999px; padding: 9px 14px; font-weight: 600; }
+.pick.on { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); }
+
+.result { background: rgba(226,172,74,.14); border: 1px solid rgba(226,172,74,.4); border-radius: 12px; padding: 10px 12px; font-weight: 600; margin-bottom: 12px; }
+
+/* sheet */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--rail); width: 100%; max-width: 560px; max-height: 86%; overflow-y: auto; border-radius: 18px 18px 0 0; padding-block: 18px calc(18px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 12px; box-sizing: border-box; }
+.sheet h3 { font: 800 24px/1 var(--display); text-transform: uppercase; letter-spacing: .06em; margin: 0; }
+.sheet .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ledger { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ledger th, .ledger td { padding: 7px 4px; border-bottom: 1px solid var(--faint); text-align: right; }
+.ledger th:first-child, .ledger td:first-child { text-align: left; }
+.ledger th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.pos { color: var(--ok); } .neg { color: #ffb4a6; }
+.logbox { font-size: 13px; color: var(--muted); display: grid; gap: 4px; max-height: 40vh; overflow-y: auto; }
+
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--bone); color: var(--felt); padding: 10px 16px; border-radius: 999px; font-weight: 600; z-index: 60; max-width: 90%; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+.toast.bad { background: #ffd2c8; color: #5a120a; }
+
+.loading { flex: 1; display: grid; place-items: center; color: var(--muted); }
+
+@keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+.betline .pile .chip { animation: pop .18s ease-out; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(226,172,74,.0); } 50% { box-shadow: 0 0 0 6px rgba(226,172,74,.25); } }
+.seat.turn { animation: pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .seat.turn, .betline .pile .chip { animation: none; } }
+</style>
+<div id="app"><div class="loading">Setting up the table…</div></div>
+
+<script>
+/*
+ * ChipStack engine — a pure reducer for Texas Hold'em chip handling.
+ * Cards are physical; this only tracks stacks, blinds, bets, pots and turns.
+ *
+ * reduce(state, action) -> new state (throws Error with a readable message on an illegal action)
+ * Every action carries { type, by } where `by` is the acting device's player id.
+ */
+(function (root) {
+  'use strict';
+
+  const STREETS = ['preflop', 'flop', 'turn', 'river', 'showdown'];
+  const DEAL_HINT = {
+    preflop: 'Deal two cards to each player',
+    flop: 'Burn one, deal the flop (3 cards)',
+    turn: 'Burn one, deal the turn (1 card)',
+    river: 'Burn one, deal the river (1 card)',
+    showdown: 'Show hands and pick the winner',
+  };
+  const HISTORY_MAX = 10;
+  const LOG_MAX = 40;
+
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const fail = (msg) => { throw new Error(msg); };
+
+  function newTable({ code, hostId, hostName, startingStack = 1000, sb = 5, bb = 10 }) {
+    if (!code) fail('Missing table code');
+    const s = {
+      code,
+      version: 0,
+      hostId,
+      settings: { startingStack: int(startingStack), sb: int(sb), bb: int(bb) },
+      players: [],
+      buttonId: null,
+      handNo: 0,
+      hand: null,
+      lastResult: null,
+      log: [],
+      history: [],
+    };
+    validateSettings(s.settings);
+    if (hostId) addPlayer(s, hostId, hostName || 'Host');
+    s.buttonId = hostId || null;
+    return s;
+  }
+
+  function int(n) {
+    const v = Math.floor(Number(n));
+    return Number.isFinite(v) ? v : NaN;
+  }
+
+  function validateSettings(st) {
+    if (!(st.startingStack > 0)) fail('Starting stack must be more than 0');
+    if (!(st.sb > 0)) fail('Small blind must be more than 0');
+    if (!(st.bb >= st.sb)) fail('Big blind must be at least the small blind');
+  }
+
+  function addPlayer(s, id, name) {
+    const clean = String(name || '').trim().slice(0, 16) || 'Player';
+    s.players.push({ id, name: clean, stack: s.settings.startingStack, buyIns: 1, sittingOut: false });
+  }
+
+  const player = (s, id) => s.players.find((p) => p.id === id);
+  const eligible = (s) => s.players.filter((p) => p.stack > 0 && !p.sittingOut);
+  const isHost = (s, id) => id === s.hostId || id === '*';
+  const nameOf = (s, id) => (player(s, id) || { name: '?' }).name;
+
+  function log(s, msg) {
+    s.log.push(msg);
+    if (s.log.length > LOG_MAX) s.log.splice(0, s.log.length - LOG_MAX);
+  }
+
+  // next id after `fromId` in `order` (cyclic) that passes `pred`
+  function nextIn(order, fromId, pred) {
+    const n = order.length;
+    let i = order.indexOf(fromId);
+    for (let k = 1; k <= n; k++) {
+      const id = order[(i + k + n) % n];
+      if (pred(id)) return id;
+    }
+    return null;
+  }
+
+  // ---------- pots ----------
+  function computePots(hand) {
+    const ids = hand.seats;
+    const live = ids.filter((id) => !hand.folded[id]);
+    const levels = [...new Set(live.map((id) => hand.committed[id] || 0))].filter((v) => v > 0).sort((a, b) => a - b);
+    const pots = [];
+    let prev = 0;
+    for (const lvl of levels) {
+      let amount = 0;
+      for (const id of ids) {
+        const c = hand.committed[id] || 0;
+        amount += Math.max(0, Math.min(c, lvl) - Math.min(c, prev));
+      }
+      const elig = live.filter((id) => (hand.committed[id] || 0) >= lvl);
+      if (amount > 0) {
+        const last = pots[pots.length - 1];
+        // merge pots with identical eligibility
+        if (last && last.eligible.join() === elig.join()) last.amount += amount;
+        else pots.push({ amount, eligible: elig });
+      }
+      prev = lvl;
+    }
+    // folded chips above the top live level (rare) go to the last pot
+    let extra = 0;
+    for (const id of ids) extra += Math.max(0, (hand.committed[id] || 0) - prev);
+    if (extra && pots.length) pots[pots.length - 1].amount += extra;
+    return pots;
+  }
+
+  const potTotal = (hand) => hand ? hand.seats.reduce((t, id) => t + (hand.committed[id] || 0), 0) : 0;
+
+  // ---------- hand lifecycle ----------
+  function post(s, h, id, amt) {
+    const p = player(s, id);
+    const a = Math.min(p.stack, amt);
+    p.stack -= a;
+    h.bets[id] = (h.bets[id] || 0) + a;
+    h.committed[id] = (h.committed[id] || 0) + a;
+    if (p.stack === 0) h.allIn[id] = true;
+    return a;
+  }
+
+  function startHand(s) {
+    if (s.hand) fail('A hand is already in progress');
+    const elig = eligible(s);
+    if (elig.length < 2) fail('Need at least 2 players with chips to deal');
+    const order = s.players.map((p) => p.id);
+    const isElig = (id) => elig.some((p) => p.id === id);
+    let btn = s.buttonId;
+    if (!btn || !isElig(btn)) btn = nextIn(order, btn || order[order.length - 1], isElig);
+    const seats = order.filter(isElig);
+    let sbId, bbId, firstToAct;
+    if (seats.length === 2) {
+      sbId = btn;
+      bbId = nextIn(seats, btn, () => true);
+      firstToAct = sbId;
+    } else {
+      sbId = nextIn(seats, btn, () => true);
+      bbId = nextIn(seats, sbId, () => true);
+      firstToAct = nextIn(seats, bbId, () => true);
+    }
+    s.handNo += 1;
+    s.buttonId = btn;
+    const h = {
+      no: s.handNo,
+      street: 'preflop',
+      seats,
+      buttonId: btn,
+      sbId,
+      bbId,
+      bets: {},
+      committed: {},
+      folded: {},
+      allIn: {},
+      acted: {},
+      currentBet: 0,
+      minRaise: s.settings.bb,
+      toAct: null,
+    };
+    s.hand = h;
+    s.lastResult = null;
+    const sbAmt = post(s, h, sbId, s.settings.sb);
+    const bbAmt = post(s, h, bbId, s.settings.bb);
+    h.currentBet = s.settings.bb; // a short blind still means others call the full big blind
+    log(s, `Hand #${h.no}: ${nameOf(s, btn)} has the button. Blinds ${sbAmt}/${bbAmt}.`);
+    h.toAct = firstToAct;
+    // if first-to-act can't act, let advance() find the right player
+    advance(s, firstToAct, true);
+  }
+
+  function canAct(h, id) { return !h.folded[id] && !h.allIn[id]; }
+
+  function advance(s, lastId, initial) {
+    const h = s.hand;
+    const live = h.seats.filter((id) => !h.folded[id]);
+    if (live.length === 1) return winUncontested(s, live[0]);
+    const actors = live.filter((id) => canAct(h, id));
+    const needs = (id) => canAct(h, id) && (!h.acted[id] || (h.bets[id] || 0) < h.currentBet);
+    let roundDone;
+    if (actors.length === 0) roundDone = true;
+    else if (actors.length === 1 && (h.bets[actors[0]] || 0) >= h.currentBet) roundDone = true;
+    else roundDone = actors.every((id) => !needs(id));
+
+    if (!roundDone) {
+      if (initial && needs(lastId)) { h.toAct = lastId; return; }
+      h.toAct = nextIn(h.seats, lastId, needs);
+      return;
+    }
+    // close the street
+    h.bets = {};
+    h.acted = {};
+    h.currentBet = 0;
+    h.minRaise = s.settings.bb;
+    const idx = STREETS.indexOf(h.street);
+    const runout = actors.length <= 1;
+    if (h.street === 'river' || runout) {
+      h.runout = runout && h.street !== 'river';
+      h.street = 'showdown';
+      h.toAct = null;
+      h.pots = computePots(h);
+      log(s, runout ? 'All in — run out the board, then show hands.' : 'Showdown — show hands.');
+      // auto-award pots with a single eligible player (uncalled chips)
+      autoAwardSingles(s);
+      return;
+    }
+    h.street = STREETS[idx + 1];
+    log(s, `${cap(h.street)}. ${DEAL_HINT[h.street]}.`);
+    h.toAct = nextIn(h.seats, h.buttonId, (id) => canAct(h, id)) ;
+    // in case button isn't in seats order (can't happen) fall back
+    if (!h.toAct) h.toAct = actors[0];
+  }
+
+  function autoAwardSingles(s) {
+    const h = s.hand;
+    const keep = [];
+    for (const pot of h.pots) {
+      if (pot.eligible.length === 1) {
+        player(s, pot.eligible[0]).stack += pot.amount;
+        log(s, `${nameOf(s, pot.eligible[0])} takes back ${pot.amount} uncalled.`);
+      } else keep.push(pot);
+    }
+    h.pots = keep;
+    if (keep.length === 0) finishHand(s, []);
+  }
+
+  function winUncontested(s, id) {
+    const h = s.hand;
+    const amt = potTotal(h);
+    player(s, id).stack += amt;
+    log(s, `${nameOf(s, id)} wins ${amt} (everyone else folded).`);
+    finishHand(s, [{ id, amount: amt }]);
+  }
+
+  function finishHand(s, wins) {
+    const h = s.hand;
+    s.lastResult = { handNo: h.no, wins };
+    s.hand = null;
+    // move button for the next hand
+    const order = s.players.map((p) => p.id);
+    const nextBtn = nextIn(order, h.buttonId, (id) => {
+      const p = player(s, id);
+      return p && p.stack > 0 && !p.sittingOut;
+    });
+    s.buttonId = nextBtn || h.buttonId;
+  }
+
+  function award(s, winnersPerPot) {
+    const h = s.hand;
+    if (!h || h.street !== 'showdown') fail('Nothing to award yet');
+    if (!Array.isArray(winnersPerPot) || winnersPerPot.length !== h.pots.length) fail('Pick a winner for every pot');
+    const totals = {};
+    h.pots.forEach((pot, i) => {
+      const ws = (winnersPerPot[i] || []).filter((id) => pot.eligible.includes(id));
+      if (!ws.length) fail(`Pick a winner for ${h.pots.length > 1 ? (i === 0 ? 'the main pot' : 'side pot ' + i) : 'the pot'}`);
+      // odd chips go to the first winner left of the button
+      const ordered = [];
+      let cur = h.buttonId;
+      for (let k = 0; k < h.seats.length; k++) {
+        cur = nextIn(h.seats, cur, () => true);
+        if (ws.includes(cur) && !ordered.includes(cur)) ordered.push(cur);
+      }
+      const share = Math.floor(pot.amount / ordered.length);
+      let rem = pot.amount - share * ordered.length;
+      for (const id of ordered) {
+        const amt = share + (rem > 0 ? 1 : 0);
+        if (rem > 0) rem--;
+        totals[id] = (totals[id] || 0) + amt;
+      }
+    });
+    const wins = Object.entries(totals).map(([id, amount]) => {
+      player(s, id).stack += amount;
+      return { id, amount };
+    });
+    log(s, wins.map((w) => `${nameOf(s, w.id)} wins ${w.amount}`).join(', ') + '.');
+    finishHand(s, wins);
+  }
+
+  // ---------- betting ----------
+  function act(s, a) {
+    const h = s.hand;
+    if (!h || h.street === 'showdown') fail('No betting right now');
+    const id = h.toAct;
+    if (a.by !== id && !isHost(s, a.by)) fail(`It's ${nameOf(s, id)}'s turn`);
+    if (a.player && a.player !== id) fail('Turn moved on — try again');
+    const p = player(s, id);
+    const mine = h.bets[id] || 0;
+    const toCall = h.currentBet - mine;
+    const who = p.name;
+    switch (a.type) {
+      case 'fold':
+        h.folded[id] = true;
+        log(s, `${who} folds.`);
+        break;
+      case 'check':
+        if (toCall > 0) fail(`Can't check — ${toCall} to call`);
+        log(s, `${who} checks.`);
+        break;
+      case 'call': {
+        if (toCall <= 0) fail('Nothing to call — check instead');
+        const amt = post(s, h, id, toCall);
+        log(s, `${who} calls ${amt}${h.allIn[id] ? ' (all in)' : ''}.`);
+        break;
+      }
+      case 'raise': {
+        // a.to = total bet for this street after the action
+        const to = int(a.to);
+        const maxTo = mine + p.stack;
+        if (!(to > h.currentBet)) fail(h.currentBet ? `Raise must be more than ${h.currentBet}` : 'Bet must be more than 0');
+        if (to > maxTo) fail(`You only have ${p.stack}`);
+        const size = to - h.currentBet;
+        const allIn = to === maxTo;
+        const minTo = h.currentBet + h.minRaise;
+        if (size < h.minRaise && !allIn) fail(`Minimum ${h.currentBet ? 'raise is to' : 'bet is'} ${minTo}`);
+        const wasBet = h.currentBet === 0;
+        post(s, h, id, to - mine);
+        if (size >= h.minRaise) {
+          h.minRaise = size;
+          h.acted = {};
+        }
+        h.currentBet = to;
+        log(s, `${who} ${wasBet ? 'bets' : 'raises to'} ${to}${allIn ? ' (all in)' : ''}.`);
+        break;
+      }
+      default:
+        fail('Unknown action');
+    }
+    h.acted[id] = true;
+    advance(s, id);
+  }
+
+  // ---------- reducer ----------
+  function reduce(prev, a) {
+    if (!a || !a.type) fail('Missing action');
+    const s = clone(prev);
+    const snapshot = () => {
+      const snap = clone(prev);
+      delete snap.history;
+      s.history.push(snap);
+      if (s.history.length > HISTORY_MAX) s.history.splice(0, s.history.length - HISTORY_MAX);
+    };
+    const host = isHost(s, a.by);
+    const noHand = () => { if (s.hand) fail('Finish the current hand first'); };
+
+    switch (a.type) {
+      case 'join': {
+        if (player(s, a.by)) {
+          if (a.name) player(s, a.by).name = String(a.name).trim().slice(0, 16) || player(s, a.by).name;
+          break;
+        }
+        if (s.players.length >= 10) fail('Table is full (10 players)');
+        addPlayer(s, a.by, a.name);
+        if (!s.hostId) s.hostId = a.by;
+        if (!s.buttonId) s.buttonId = a.by;
+        log(s, `${nameOf(s, a.by)} joined with ${s.settings.startingStack}.`);
+        break;
+      }
+      case 'leave': {
+        const target = a.player || a.by;
+        if (target !== a.by && !host) fail('Only the host can remove players');
+        if (s.hand && s.hand.seats.includes(target)) fail('Wait until this hand ends');
+        const p = player(s, target);
+        if (!p) break;
+        snapshot();
+        if (s.buttonId === target) {
+          const order = s.players.map((x) => x.id);
+          s.buttonId = nextIn(order, target, (id) => id !== target);
+        }
+        s.players = s.players.filter((x) => x.id !== target);
+        if (s.hostId === target) s.hostId = s.players[0] ? s.players[0].id : null;
+        log(s, `${p.name} left with ${p.stack}.`);
+        break;
+      }
+      case 'sitOut': {
+        const target = a.player || a.by;
+        if (target !== a.by && !host) fail('Only the host can do that');
+        const p = player(s, target);
+        if (!p) fail('Not at this table');
+        p.sittingOut = !!a.value;
+        log(s, `${p.name} ${p.sittingOut ? 'sits out' : 'is back in'}.`);
+        break;
+      }
+      case 'move': {
+        noHand();
+        const i = s.players.findIndex((p) => p.id === a.player);
+        const j = i + (a.dir < 0 ? -1 : 1);
+        if (i < 0 || j < 0 || j >= s.players.length) break;
+        [s.players[i], s.players[j]] = [s.players[j], s.players[i]];
+        break;
+      }
+      case 'button': {
+        noHand();
+        if (!player(s, a.player)) fail('Not at this table');
+        s.buttonId = a.player;
+        log(s, `Button moved to ${nameOf(s, a.player)}.`);
+        break;
+      }
+      case 'rebuy': {
+        const target = a.player || a.by;
+        if (target !== a.by && !host) fail('Only the host can add chips for someone else');
+        if (s.hand && s.hand.seats.includes(target)) fail('Rebuy between hands');
+        const p = player(s, target);
+        if (!p) fail('Not at this table');
+        snapshot();
+        p.stack += s.settings.startingStack;
+        p.buyIns += 1;
+        log(s, `${p.name} buys in again (+${s.settings.startingStack}).`);
+        break;
+      }
+      case 'adjust': {
+        if (!host) fail('Only the host can adjust stacks');
+        noHand();
+        const p = player(s, a.player);
+        if (!p) fail('Not at this table');
+        const v = int(a.stack);
+        if (!(v >= 0)) fail('Stack must be 0 or more');
+        snapshot();
+        log(s, `Host set ${p.name}'s stack ${p.stack} → ${v}.`);
+        p.stack = v;
+        break;
+      }
+      case 'settings': {
+        if (!host) fail('Only the host can change blinds');
+        noHand();
+        const st = { startingStack: int(a.startingStack ?? s.settings.startingStack), sb: int(a.sb ?? s.settings.sb), bb: int(a.bb ?? s.settings.bb) };
+        validateSettings(st);
+        s.settings = st;
+        log(s, `Blinds now ${st.sb}/${st.bb}, buy-in ${st.startingStack}.`);
+        break;
+      }
+      case 'deal':
+        snapshot();
+        startHand(s);
+        break;
+      case 'fold':
+      case 'check':
+      case 'call':
+      case 'raise':
+        snapshot();
+        act(s, a);
+        break;
+      case 'award':
+        snapshot();
+        award(s, a.winners);
+        break;
+      case 'undo': {
+        if (!host) fail('Only the host can undo');
+        const last = s.history.pop();
+        if (!last) fail('Nothing to undo');
+        const hist = s.history;
+        const restored = clone(last);
+        restored.history = hist;
+        restored.version = s.version;
+        restored.log = (restored.log || []).concat();
+        log(restored, 'Host undid the last action.');
+        return bump(restored);
+      }
+      default:
+        fail('Unknown action ' + a.type);
+    }
+    return bump(s);
+  }
+
+  function bump(s) { s.version = (s.version || 0) + 1; s.updatedAt = Date.now(); return s; }
+  function cap(w) { return w.charAt(0).toUpperCase() + w.slice(1); }
+
+  // ---------- helpers for UI ----------
+  function legal(s, id) {
+    const h = s.hand;
+    if (!h || h.street === 'showdown' || h.toAct !== id) return null;
+    const p = player(s, id);
+    const mine = h.bets[id] || 0;
+    const toCall = Math.max(0, h.currentBet - mine);
+    const maxTo = mine + p.stack;
+    const minTo = Math.min(maxTo, h.currentBet + h.minRaise);
+    return {
+      toCall: Math.min(toCall, p.stack),
+      canCheck: toCall === 0,
+      canRaise: maxTo > h.currentBet && (p.stack > toCall),
+      minTo,
+      maxTo,
+      mine,
+      isBet: h.currentBet === 0,
+      pot: potTotal(h),
+      currentBet: h.currentBet,
+    };
+  }
+
+  const api = { newTable, reduce, legal, computePots, potTotal, STREETS, DEAL_HINT };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.ChipEngine = api;
+})(typeof self !== 'undefined' ? self : this);
+
+</script>
+<script>
+/*
+ * Sync backends. Each exposes:
+ *   kind, me ({id}), create(settings, name) -> code, open(code), submit(action) -> state,
+ *   onState(cb), online (Set of player ids, optional), close()
+ *
+ * - ClaudeBackend: when the page runs as a claude.ai artifact (shared db doc + room pokes)
+ * - PeerBackend:   when hosted anywhere else (GitHub Pages) — host's phone is the server, via PeerJS
+ * - LocalBackend:  one phone for the whole table (pass-and-play), stored in this browser
+ */
+(function (root) {
+  'use strict';
+  const E = root.ChipEngine;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const makeCode = () => Array.from({ length: 4 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('');
+  const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+    del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
+  };
+
+  class Emitter {
+    constructor() { this.subs = new Set(); this.state = null; this.online = new Set(); this.onlineSubs = new Set(); }
+    onState(cb) { this.subs.add(cb); if (this.state) cb(this.state); return () => this.subs.delete(cb); }
+    onOnline(cb) { this.onlineSubs.add(cb); return () => this.onlineSubs.delete(cb); }
+    push(s) {
+      if (!s) return;
+      if (this.state && this.state.code === s.code && (s.version || 0) < (this.state.version || 0)) return;
+      this.state = s;
+      this.subs.forEach((cb) => cb(s));
+    }
+    setOnline(set) { this.online = set; this.onlineSubs.forEach((cb) => cb(set)); }
+  }
+
+  // ---------------- claude.ai artifact backend ----------------
+  class ClaudeBackend extends Emitter {
+    constructor(db, user, room) {
+      super();
+      this.kind = 'claude';
+      this.db = db; this.user = user; this.room = room;
+      this.tab = rid();
+    }
+    async init() {
+      const id = this.user ? await this.user.id() : null;
+      if (!id) throw new Error('Sign in to claude.ai to join a table.');
+      this.me = { id: 'u' + String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) };
+      return this;
+    }
+    ref(code) { return this.db.doc('tables/' + code); }
+    async withLease(code, fn) {
+      const ref = this.ref(code);
+      for (let i = 0; i < 20; i++) {
+        let r;
+        try { r = await ref.acquire({ holder: this.me.id + ':' + this.tab, ttlMs: 5000 }); }
+        catch (e) { if (e && e.code === 'unavailable') { await sleep(300); continue; } throw dbErr(e); }
+        if (r && r.acquired) {
+          const snap = await ref.get();
+          const cur = snap.exists ? snap.data() : null;
+          const next = fn(cur && cur.code ? cur : null);
+          if (!next) return cur;
+          try { await ref.set(next); } catch (e) { throw dbErr(e); }
+          this.push(next);
+          this.poke(next.version);
+          return next;
+        }
+        await sleep(150 + Math.random() * 250);
+      }
+      throw new Error('The table is busy — try again.');
+    }
+    async create(settings, name) {
+      for (let tries = 0; tries < 5; tries++) {
+        const code = makeCode();
+        let taken = false;
+        await this.withLease(code, (cur) => {
+          if (cur) { taken = true; return null; }
+          return E.newTable({ code, hostId: this.me.id, hostName: name, ...settings });
+        });
+        if (!taken) { await this.open(code); return code; }
+      }
+      throw new Error('Could not make a table code — try again.');
+    }
+    async open(code) {
+      this.close();
+      this.code = code;
+      const ref = this.ref(code);
+      const snap = await ref.get();
+      if (!snap.exists || !(snap.data() || {}).code) throw new Error(`No table with code ${code}.`);
+      this.push(snap.data());
+      this.unsub = ref.onSnapshot((s) => { const d = s.exists ? s.data() : null; if (d && d.code) this.push(d); }, () => {});
+      if (this.room) {
+        try {
+          this.r = await this.room.join('t-' + code.toLowerCase());
+          this.offPoke = this.r.on('poke', async (m) => {
+            if (m && m.isMe) return;
+            const v = m && m.data && m.data.v;
+            if (this.state && v && v <= this.state.version) return;
+            try { const s = await ref.get(); if (s.exists) this.push(s.data()); } catch (e) { /* ignore */ }
+          });
+          this.r.presence({ pid: this.me.id }).catch(() => {});
+          this.offPeers = this.r.onPeers(() => {
+            const set = new Set();
+            for (const p of this.r.peers()) if (p.presence && typeof p.presence.pid === 'string') set.add(p.presence.pid);
+            this.setOnline(set);
+          });
+        } catch (e) { this.r = null; }
+      }
+    }
+    poke(v) { if (this.r) this.r.emit('poke', { v }).catch(() => {}); }
+    submit(action) {
+      return this.withLease(this.code, (cur) => {
+        if (!cur) throw new Error('This table no longer exists.');
+        return E.reduce(cur, { ...action, by: this.me.id });
+      });
+    }
+    close() {
+      if (this.unsub) this.unsub();
+      if (this.offPoke) this.offPoke();
+      if (this.offPeers) this.offPeers();
+      if (this.r) this.r.leave().catch(() => {});
+      this.unsub = this.offPoke = this.offPeers = this.r = null;
+      this.state = null;
+    }
+  }
+  function dbErr(e) {
+    if (e instanceof Error) return e;
+    if (e && e.code === 'invalid_argument') return new Error('You can view this table but not play. Ask the owner for edit access.');
+    if (e && e.code === 'quota_exceeded') return new Error('Storage is full. Delete old tables.');
+    return new Error((e && e.message) || 'Something went wrong syncing the table.');
+  }
+
+  // ---------------- PeerJS backend (host phone is the server) ----------------
+  let peerLib = null;
+  function loadPeer() {
+    if (root.Peer) return Promise.resolve(root.Peer);
+    if (peerLib) return peerLib;
+    peerLib = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js';
+      s.onload = () => res(root.Peer);
+      s.onerror = () => rej(new Error('Could not load the connection library. Check your internet.'));
+      document.head.appendChild(s);
+    });
+    return peerLib;
+  }
+  const PEER_PREFIX = 'chipstack-v1-';
+
+  class PeerBackend extends Emitter {
+    constructor() {
+      super();
+      this.kind = 'peer';
+      let id = store.get('chipstack:pid');
+      if (!id) { id = 'p' + rid(); store.set('chipstack:pid', id); }
+      this.me = { id };
+      this.pending = new Map();
+      this.conns = new Set();
+    }
+    async init() { await loadPeer(); return this; }
+    async create(settings, name) {
+      for (let tries = 0; tries < 5; tries++) {
+        const code = makeCode();
+        try {
+          await this.host(code, E.newTable({ code, hostId: this.me.id, hostName: name, ...settings }));
+          return code;
+        } catch (e) { if (!/taken/.test(e.message)) throw e; }
+      }
+      throw new Error('Could not make a table code — try again.');
+    }
+    hostedCodes() {
+      try { return JSON.parse(store.get('chipstack:hosted') || '[]'); } catch (e) { return []; }
+    }
+    host(code, state) {
+      this.close();
+      this.code = code; this.isHost = true;
+      return new Promise((res, rej) => {
+        const peer = new root.Peer(PEER_PREFIX + code, { debug: 0 });
+        this.peer = peer;
+        let opened = false;
+        peer.on('open', () => {
+          opened = true;
+          this.state = null;
+          this.push(state);
+          this.save();
+          res(code);
+        });
+        peer.on('error', (err) => {
+          if (!opened) {
+            if (err.type === 'unavailable-id') rej(new Error('Code taken'));
+            else rej(new Error('Could not start the table: ' + (err.type || err.message)));
+          }
+        });
+        peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
+        peer.on('connection', (conn) => {
+          conn.on('open', () => { this.conns.add(conn); conn.send({ t: 'state', state: this.state }); this.updateOnline(); });
+          conn.on('close', () => { this.conns.delete(conn); this.updateOnline(); });
+          conn.on('data', (msg) => {
+            if (!msg || msg.t !== 'act') return;
+            conn.pid = msg.action && msg.action.by;
+            this.updateOnline();
+            try {
+              const next = E.reduce(this.state, msg.action);
+              this.apply(next);
+              conn.send({ t: 'ok', rid: msg.rid });
+            } catch (e) { conn.send({ t: 'err', rid: msg.rid, msg: e.message }); }
+          });
+        });
+      });
+    }
+    updateOnline() {
+      const set = new Set([this.me.id]);
+      this.conns.forEach((c) => c.pid && set.add(c.pid));
+      this.setOnline(set);
+    }
+    save() {
+      if (!this.isHost || !this.state) return;
+      store.set('chipstack:host:' + this.code, JSON.stringify(this.state));
+      const list = this.hostedCodes().filter((c) => c !== this.code);
+      list.unshift(this.code);
+      store.set('chipstack:hosted', JSON.stringify(list.slice(0, 5)));
+    }
+    apply(next) {
+      this.push(next);
+      this.save();
+      this.conns.forEach((c) => { try { c.send({ t: 'state', state: next }); } catch (e) { /* ignore */ } });
+    }
+    async open(code) {
+      const saved = store.get('chipstack:host:' + code);
+      if (saved) {
+        try { return await this.host(code, JSON.parse(saved)); }
+        catch (e) { if (!/taken/.test(e.message)) throw e; /* someone else hosts it now: join as guest */ }
+      }
+      return this.join(code);
+    }
+    join(code) {
+      this.close();
+      this.code = code; this.isHost = false;
+      return new Promise((res, rej) => {
+        const peer = new root.Peer({ debug: 0 });
+        this.peer = peer;
+        let settled = false;
+        const connect = () => {
+          const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+          this.conn = conn;
+          conn.on('open', () => { this.setOnline(new Set([this.me.id])); });
+          conn.on('data', (msg) => {
+            if (!msg) return;
+            if (msg.t === 'state') { this.push(msg.state); if (!settled) { settled = true; res(code); } }
+            else if (msg.t === 'ok' || msg.t === 'err') {
+              const p = this.pending.get(msg.rid);
+              if (!p) return;
+              this.pending.delete(msg.rid);
+              msg.t === 'ok' ? p.res(this.state) : p.rej(new Error(msg.msg));
+            }
+          });
+          conn.on('close', () => {
+            if (this.conn !== conn || this.closed) return;
+            this.setOnline(new Set());
+            setTimeout(() => { if (this.conn === conn && !this.closed) connect(); }, 2000);
+          });
+        };
+        peer.on('open', connect);
+        peer.on('error', (err) => {
+          if (err.type === 'peer-unavailable') {
+            if (!settled) { settled = true; rej(new Error(`No table with code ${code} is open. The host's phone needs the app open.`)); }
+            else setTimeout(() => !this.closed && connect(), 3000);
+          } else if (!settled) { settled = true; rej(new Error('Connection failed: ' + (err.type || err.message))); }
+        });
+        peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
+      });
+    }
+    submit(action) {
+      const a = { ...action, by: this.me.id };
+      if (this.isHost) {
+        const next = E.reduce(this.state, a);
+        this.apply(next);
+        return Promise.resolve(next);
+      }
+      return new Promise((res, rej) => {
+        if (!this.conn || !this.conn.open) return rej(new Error('Reconnecting to the host…'));
+        const id = rid();
+        this.pending.set(id, { res, rej });
+        this.conn.send({ t: 'act', rid: id, action: a });
+        setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); rej(new Error('The host did not answer. Is their app open?')); } }, 8000);
+      });
+    }
+    close() {
+      this.closed = true;
+      try { if (this.peer) this.peer.destroy(); } catch (e) { /* ignore */ }
+      this.peer = this.conn = null;
+      this.conns = new Set();
+      this.state = null;
+      this.closed = false;
+    }
+  }
+
+  // ---------------- one-phone backend ----------------
+  class LocalBackend extends Emitter {
+    constructor() { super(); this.kind = 'local'; this.me = { id: '*' }; }
+    async init() { return this; }
+    async create(settings, name) {
+      const code = 'HERE';
+      const s = E.newTable({ code, hostId: 'h' + rid(), hostName: name, ...settings });
+      this.state = null;
+      this.push(s);
+      this.save();
+      return code;
+    }
+    async open() {
+      const raw = store.get('chipstack:local');
+      if (!raw) throw new Error('No saved one-phone table.');
+      this.state = null;
+      this.push(JSON.parse(raw));
+    }
+    save() { store.set('chipstack:local', JSON.stringify(this.state)); }
+    async submit(action) {
+      const a = { ...action, by: action.by || '*' };
+      const next = E.reduce(this.state, a);
+      this.push(next);
+      this.save();
+      return next;
+    }
+    close() { this.state = null; }
+  }
+
+  root.ChipTransport = { ClaudeBackend, PeerBackend, LocalBackend, makeCode, store, rid };
+})(typeof self !== 'undefined' ? self : this);
+
+</script>
+<script>
+/* ChipStack UI */
+(function () {
+  'use strict';
+  const E = window.ChipEngine;
+  const T = window.ChipTransport;
+  const $app = document.getElementById('app');
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (n) => Number(n || 0).toLocaleString('en-NZ');
+
+  let net = null;          // ClaudeBackend | PeerBackend (online mode)
+  let netReady = null;     // promise resolving to net or throwing
+  let backend = null;      // the backend in use at the table
+  let S = null;            // current table state
+  let online = new Set();
+  const ui = {
+    screen: 'home', busy: false, err: '', homeNote: '',
+    stageKey: '', staged: [], confirmFold: false, actFor: false,
+    winKey: '', winners: [], sheet: null, sheetPlayer: null, confirmRemove: false,
+  };
+
+  // ---------------- boot ----------------
+  async function boot() {
+    const hash = (location.hash || '').replace('#', '').toUpperCase();
+    if (/^[A-Z0-9]{4}$/.test(hash)) ui.prefill = hash;
+    netReady = (async () => {
+      if (window.claude && typeof window.claude.use === 'function') {
+        const db = await window.claude.use('db');
+        if (db) {
+          const [user, room] = await Promise.all([window.claude.use('user'), window.claude.use('room')]);
+          return new T.ClaudeBackend(db, user, room).init();
+        }
+      }
+      return new T.PeerBackend().init();
+    })();
+    netReady.then((b) => { net = b; render(); }).catch((e) => { ui.homeNote = e.message; render(); });
+    render();
+  }
+
+  // ---------------- helpers ----------------
+  const meId = () => (backend ? backend.me.id : null);
+  const isLocal = () => backend && backend.kind === 'local';
+  const amHost = () => S && (isLocal() || S.hostId === meId());
+  const P = (id) => S.players.find((p) => p.id === id);
+  const nameOf = (id) => (P(id) || { name: '?' }).name;
+
+  function denoms() {
+    const { sb, bb } = S.settings;
+    const vals = [...new Set([sb, bb, bb * 5, bb * 25, bb * 100])].sort((a, b) => a - b);
+    return vals.slice(0, 5).map((v, i) => ({ v, cls: 'c' + (i + 1) }));
+  }
+  function breakdown(amount) {
+    const ds = denoms().slice().reverse();
+    const out = [];
+    let rest = amount;
+    for (const d of ds) {
+      const n = Math.floor(rest / d.v);
+      if (n > 0) { out.push({ ...d, n }); rest -= n * d.v; }
+    }
+    if (rest > 0) out.push({ v: rest, cls: 'c1', n: 1 });
+    return out;
+  }
+  function pileHTML(amount, maxCols = 5) {
+    if (!amount) return '';
+    return '<span class="pile" aria-hidden="true">' + breakdown(amount).slice(0, maxCols).map((d) =>
+      '<span class="col">' + Array.from({ length: Math.min(d.n, 6) }, () => `<span class="chip mini ${d.cls}"></span>`).join('') + '</span>'
+    ).join('') + '</span>';
+  }
+
+  let toastTimer;
+  function toast(msg, bad) {
+    let el = document.querySelector('.toast');
+    if (!el) { el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+    el.textContent = msg;
+    el.classList.toggle('bad', !!bad);
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, bad ? 3600 : 2200);
+  }
+
+  async function send(action) {
+    if (ui.busy) return;
+    ui.busy = true; render();
+    try { await backend.submit(action); }
+    catch (e) { toast(e.message, true); }
+    finally { ui.busy = false; render(); }
+  }
+
+  let wakeLock = null;
+  function keepAwake() {
+    if (wakeLock || !navigator.wakeLock) return;
+    navigator.wakeLock.request('screen').then((l) => { wakeLock = l; l.addEventListener('release', () => { wakeLock = null; }); }).catch(() => {});
+  }
+  document.addEventListener('pointerdown', keepAwake, { passive: true });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wakeLock = null; } });
+
+  // ---------------- entering a table ----------------
+  let unsub = null;
+  function attach(b) {
+    if (unsub) unsub();
+    backend = b;
+    let lastTurn = null;
+    const u1 = b.onState((s) => {
+      S = s;
+      ui.screen = 'table';
+      const turn = s.hand && s.hand.toAct;
+      if (turn && turn !== lastTurn && turn === meId() && !isLocal()) { try { navigator.vibrate && navigator.vibrate([60, 40, 60]); } catch (e) { /* ignore */ } }
+      lastTurn = turn;
+      render();
+    });
+    const u2 = b.onOnline ? b.onOnline((set) => { online = set; render(); }) : () => {};
+    unsub = () => { u1(); u2(); };
+    T.store.set('chipstack:name', ui.name || T.store.get('chipstack:name') || '');
+  }
+
+  async function createTable(form, local) {
+    const name = form.name.trim();
+    if (!name) return fail('Enter your name first.');
+    const settings = { startingStack: +form.stack, sb: +form.sb, bb: +form.bb };
+    if (!(settings.startingStack > 0) || !(settings.sb > 0) || !(settings.bb >= settings.sb)) return fail('Check the buy-in and blinds: big blind must be at least the small blind.');
+    ui.busy = true; ui.err = ''; render();
+    try {
+      T.store.set('chipstack:name', name);
+      const b = local ? await new T.LocalBackend().init() : await netReady;
+      const code = await b.create(settings, name);
+      if (!local) T.store.set('chipstack:last', code);
+      attach(b);
+    } catch (e) { fail(e.message); }
+    finally { ui.busy = false; render(); }
+  }
+
+  async function joinTable(code, name) {
+    code = (code || '').trim().toUpperCase();
+    name = (name || '').trim();
+    if (!name) return fail('Enter your name first.');
+    if (!/^[A-Z0-9]{4}$/.test(code)) return fail('Table codes are 4 letters or numbers.');
+    ui.busy = true; ui.err = ''; render();
+    try {
+      T.store.set('chipstack:name', name);
+      const b = await netReady;
+      await b.open(code);
+      attach(b);
+      T.store.set('chipstack:last', code);
+      if (!b.state.players.some((p) => p.id === b.me.id)) await b.submit({ type: 'join', name });
+    } catch (e) { fail(e.message); }
+    finally { ui.busy = false; render(); }
+  }
+
+  async function continueLocal() {
+    try { const b = new T.LocalBackend(); await b.open(); attach(b); } catch (e) { fail(e.message); }
+  }
+
+  function fail(msg) { ui.err = msg; ui.busy = false; render(); }
+
+  function leaveToHome() {
+    if (backend && backend.kind !== 'local' && backend.close) backend.close();
+    if (unsub) unsub();
+    backend = null; S = null; ui.screen = 'home'; ui.sheet = null;
+    render();
+  }
+
+  // ---------------- render ----------------
+  function render() {
+    const active = document.activeElement;
+    const focusId = active && active.id;
+    const sel = focusId && active.selectionStart != null ? [active.selectionStart, active.selectionEnd] : null;
+    if (ui.screen === 'table' && S) renderTable(); else renderHome();
+    if (focusId) {
+      const el = document.getElementById(focusId);
+      if (el) { el.focus(); if (sel && el.setSelectionRange) try { el.setSelectionRange(sel[0], sel[1]); } catch (e) { /* ignore */ } }
+    }
+  }
+
+  // keep typed values across re-renders
+  const draft = {};
+  function val(id, fallback) { return draft[id] != null ? draft[id] : fallback; }
+
+  function renderHome() {
+    const name = val('in-name', T.store.get('chipstack:name') || '');
+    const last = T.store.get('chipstack:last');
+    const hasLocal = !!T.store.get('chipstack:local');
+    const peerMode = net && net.kind === 'peer';
+    const hosted = peerMode ? net.hostedCodes() : [];
+    const ready = !!net;
+    $app.innerHTML = `
+    <div class="home">
+      <div class="brand">
+        ${chipSVG()}
+        <div><h1>Chip<br>Stack</h1><p>Real cards on the table, chips on your phone. Built for Texas Hold'em.</p></div>
+      </div>
+      <div class="field"><label for="in-name">Your name</label><input id="in-name" maxlength="16" autocomplete="nickname" placeholder="e.g. Abbey" value="${esc(name)}"></div>
+
+      <section class="panel" aria-labelledby="h-join">
+        <h2 id="h-join">Join a table</h2>
+        <div class="field"><label for="in-code">Table code</label><input id="in-code" class="code" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="ABCD" value="${esc(val('in-code', ui.prefill || ''))}"></div>
+        <button class="btn primary" id="b-join" ${ui.busy || !ready ? 'disabled' : ''}>Join table</button>
+        ${last && last !== ui.prefill ? `<button class="link" id="b-last">Rejoin ${esc(last)}</button>` : ''}
+        ${hosted.map((c) => `<button class="link" data-resume="${esc(c)}">Resume hosting ${esc(c)}</button>`).join('')}
+      </section>
+
+      <section class="panel" aria-labelledby="h-new">
+        <h2 id="h-new">Start a table</h2>
+        <div class="row3">
+          <div class="field"><label for="in-stack">Buy-in</label><input id="in-stack" inputmode="numeric" value="${esc(val('in-stack', '1000'))}"></div>
+          <div class="field"><label for="in-sb">Small blind</label><input id="in-sb" inputmode="numeric" value="${esc(val('in-sb', '5'))}"></div>
+          <div class="field"><label for="in-bb">Big blind</label><input id="in-bb" inputmode="numeric" value="${esc(val('in-bb', '10'))}"></div>
+        </div>
+        <button class="btn primary" id="b-create" ${ui.busy || !ready ? 'disabled' : ''}>Create table</button>
+        ${peerMode ? '<p class="note">You will host the table. Keep this page open on your phone while you play — everyone else connects through it.</p>' : ''}
+        <button class="link" id="b-local">One phone for everyone (pass it around)</button>
+        ${hasLocal ? '<button class="link" id="b-local-continue">Continue the one-phone table</button>' : ''}
+      </section>
+      <div class="err" role="alert">${esc(ui.err)}</div>
+      ${!ready ? `<p class="note">${esc(ui.homeNote || 'Connecting…')}</p>` : ''}
+    </div>`;
+    const form = () => ({ name: document.getElementById('in-name').value, stack: document.getElementById('in-stack').value, sb: document.getElementById('in-sb').value, bb: document.getElementById('in-bb').value });
+    $app.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => { draft[i.id] = i.value; }));
+    on('#b-join', () => joinTable(document.getElementById('in-code').value, document.getElementById('in-name').value));
+    on('#b-last', () => joinTable(last, document.getElementById('in-name').value));
+    on('#b-create', () => createTable(form(), false));
+    on('#b-local', () => createTable(form(), true));
+    on('#b-local-continue', continueLocal);
+    $app.querySelectorAll('[data-resume]').forEach((b) => b.addEventListener('click', () => joinTable(b.dataset.resume, document.getElementById('in-name').value)));
+    const codeIn = document.getElementById('in-code');
+    codeIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinTable(codeIn.value, document.getElementById('in-name').value); });
+  }
+
+  function chipSVG() {
+    return `<svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#c8372d"/>${
+      Array.from({ length: 8 }, (_, i) => `<rect x="28" y="2" width="8" height="12" rx="2" fill="#f2ecdc" transform="rotate(${i * 45} 32 32)"/>`).join('')
+    }<circle cx="32" cy="32" r="18" fill="#c8372d" stroke="#f2ecdc" stroke-width="2" stroke-dasharray="4 3"/><text x="32" y="38" text-anchor="middle" font-family="Big Shoulders Display, Impact, sans-serif" font-weight="900" font-size="17" fill="#f2ecdc">$</text></svg>`;
+  }
+
+  function on(sel, fn) { const el = $app.querySelector(sel) || document.querySelector(sel); if (el) el.addEventListener('click', fn); }
+
+  // ---------------- table screen ----------------
+  function renderTable() {
+    const h = S.hand;
+    const pot = E.potTotal(h);
+    const st = h ? h.street : null;
+    const streetIdx = st ? E.STREETS.indexOf(st) : -1;
+    const labels = ['PRE', 'FLOP', 'TURN', 'RIVER', 'SHOW'];
+    const lastRes = S.lastResult && !h ? S.lastResult : null;
+    let hint = '';
+    if (h) hint = st === 'showdown' ? (h.runout ? 'Run out the rest of the board, then show hands' : E.DEAL_HINT.showdown) : E.DEAL_HINT[st];
+    else hint = S.players.length < 2 ? `Waiting for players — share code ${S.code}` : 'Shuffle up and deal when ready';
+
+    const sidePots = h && h.pots && h.pots.length > 1 ? h.pots.map((p, i) => `${i ? 'Side ' + i : 'Main'} ${fmt(p.amount)}`).join(' · ') : '';
+
+    $app.innerHTML = `
+    <header class="top">
+      <span class="codepill" aria-label="Table code">${esc(S.code === 'HERE' ? 'ONE' : S.code)}</span>
+      <div class="meta">${h ? `<b>Hand ${h.no}</b><br>` : `<b>${S.players.length} at the table</b><br>`}Blinds ${fmt(S.settings.sb)}/${fmt(S.settings.bb)}</div>
+      <button class="iconbtn" id="b-menu" aria-label="Table menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    </header>
+    <main class="scroll">
+      ${lastRes && lastRes.wins.length ? `<div class="result">${lastRes.wins.map((w) => `${esc(nameOf(w.id))} won ${fmt(w.amount)}`).join(' · ')}</div>` : ''}
+      <section class="potzone" id="potzone" aria-live="polite">
+        <div class="streets">${labels.map((l, i) => `<span class="${i === streetIdx ? 'on' : i < streetIdx ? 'done' : ''}">${l}</span>`).join('')}</div>
+        <div class="label">Pot</div>
+        <div class="amt num">${fmt(pot)}</div>
+        ${pileHTML(pot)}
+        ${sidePots ? `<div class="side">${sidePots}</div>` : ''}
+        <div class="hint">${esc(hint)}</div>
+      </section>
+      <section class="seats" aria-label="Players in seat order">
+        ${S.players.map(seatHTML).join('')}
+      </section>
+      ${!h ? `<p class="note" style="margin-top:12px">${isLocal() ? 'Tap a player to move seats, give the button or add chips.' : 'Seat order should match where people sit, going clockwise. Tap a player to move them.'}</p>` : ''}
+      ${!h && isLocal() ? '<button class="btn ghost small" id="b-add" style="margin-top:4px">Add player</button>' : ''}
+    </main>
+    <footer class="dock" id="dock">${dockHTML()}</footer>
+    ${ui.sheet ? sheetHTML() : ''}`;
+    wireTable();
+  }
+
+  function seatHTML(p) {
+    const h = S.hand;
+    const inHand = h && h.seats.includes(p.id);
+    const folded = inHand && h.folded[p.id];
+    const allIn = inHand && h.allIn[p.id];
+    const turn = h && h.toAct === p.id;
+    const bet = inHand ? (h.bets[p.id] || 0) : 0;
+    const btn = h ? h.buttonId === p.id : S.buttonId === p.id;
+    const out = !inHand && (p.sittingOut || p.stack === 0);
+    const status = [];
+    if (p.id === meId()) status.push('<span class="tag you">You</span>');
+    if (p.id === S.hostId && !isLocal()) status.push('<span class="tag">Host</span>');
+    if (allIn) status.push('<span class="tag allin">All in</span>');
+    if (folded) status.push('<span class="tag">Folded</span>');
+    if (p.sittingOut) status.push('<span class="tag">Sitting out</span>');
+    else if (p.stack === 0 && !inHand) status.push('<span class="tag">Busted</span>');
+    if (h && !inHand && !p.sittingOut && p.stack > 0) status.push('<span class="tag">Next hand</span>');
+    if (turn) status.push('<span class="tag" style="background:var(--brass);color:var(--brass-ink)">To act</span>');
+    const showOnline = !isLocal() && backend.kind !== 'local';
+    return `<button class="seat ${turn ? 'turn' : ''} ${folded ? 'folded' : ''} ${out ? 'out' : ''}" data-player="${esc(p.id)}">
+      <span class="tokens">${btn ? '<span class="tok d" title="Dealer button">D</span>' : ''}${h && h.sbId === p.id ? '<span class="tok sb" title="Small blind">SB</span>' : ''}${h && h.bbId === p.id ? '<span class="tok bb" title="Big blind">BB</span>' : ''}</span>
+      <span style="min-width:0">
+        <span class="nm">${showOnline ? `<span class="dot ${online.has(p.id) ? 'on' : ''}" title="${online.has(p.id) ? 'Online' : 'Offline'}"></span> ` : ''}${esc(p.name)}</span>
+        <span class="sub">${status.join('')}</span>
+      </span>
+      <span><span class="stack num">${fmt(p.stack)}</span>${bet ? `<span class="bet num">${pileHTML(bet, 3)}${fmt(bet)}</span>` : ''}</span>
+    </button>`;
+  }
+
+  // ----- dock -----
+  function actorId() {
+    const h = S.hand;
+    if (!h || !h.toAct) return null;
+    if (isLocal()) return h.toAct;
+    if (h.toAct === meId()) return h.toAct;
+    if (amHost() && ui.actFor) return h.toAct;
+    return null;
+  }
+
+  function dockHTML() {
+    const h = S.hand;
+    const me = isLocal() ? null : P(meId());
+    if (!h) {
+      const elig = S.players.filter((p) => p.stack > 0 && !p.sittingOut);
+      const can = elig.length >= 2;
+      return `
+        <div class="dockhead"><span class="who">${me ? esc(me.name) : 'Between hands'}</span>${me ? `<span class="mystack num"><small>Stack</small>${fmt(me.stack)}</span>` : ''}</div>
+        ${me && me.stack === 0 ? '<button class="btn" id="b-rebuy-me">Rebuy ' + fmt(S.settings.startingStack) + '</button>' : ''}
+        <button class="btn primary" id="b-deal" ${!can || ui.busy ? 'disabled' : ''}>${can ? `Deal hand ${S.handNo + 1}` : 'Need 2 players with chips'}</button>
+        ${can ? `<p class="note" style="margin:0;text-align:center">${esc(nameOf(S.buttonId))} gets the button. Blinds go in automatically.</p>` : ''}`;
+    }
+    if (h.street === 'showdown') return showdownHTML();
+    const actor = actorId();
+    if (!actor) {
+      const waitingOn = nameOf(h.toAct);
+      return `
+        <div class="dockhead"><span class="who">${me ? esc(me.name) : ''}</span>${me ? `<span class="mystack num"><small>Stack</small>${fmt(me.stack)}</span>` : ''}</div>
+        <div class="waiting">Waiting for <b>${esc(waitingOn)}</b>${me && h.seats.includes(me.id) && !h.folded[me.id] ? ` · you have ${fmt(h.bets[me.id] || 0)} in this round` : ''}</div>
+        ${amHost() ? `<button class="btn ghost small" id="b-actfor">Act for ${esc(waitingOn)}</button>` : ''}`;
+    }
+    return betDockHTML(actor);
+  }
+
+  function betDockHTML(actor) {
+    const h = S.hand;
+    const p = P(actor);
+    const L = E.legal(S, actor);
+    const key = `${h.no}|${h.street}|${actor}|${h.currentBet}|${S.version}`;
+    if (ui.stageKey.split('|').slice(0, 4).join('|') !== key.split('|').slice(0, 4).join('|')) { ui.staged = []; ui.confirmFold = false; }
+    ui.stageKey = key;
+    const staged = ui.staged.reduce((t, v) => t + v, 0);
+    const to = L.mine + staged;
+    const allIn = staged === p.stack;
+    let third = { label: L.isBet ? 'Bet' : 'Raise', act: null, disabled: true };
+    if (staged > 0) {
+      if (to === h.currentBet && L.toCall > 0) third = { label: `Call ${fmt(staged)}`, act: { type: 'call' } };
+      else if (to > h.currentBet && (to >= L.minTo || allIn)) third = { label: allIn ? `All in ${fmt(to)}` : (L.isBet ? `Bet ${fmt(to)}` : `Raise to ${fmt(to)}`), act: { type: 'raise', to } };
+      else if (to < h.currentBet && allIn) third = { label: `All in ${fmt(staged)}`, act: { type: 'call' } };
+      else third = { label: `Min ${fmt(L.minTo)}`, act: 'min' };
+    }
+    const callLabel = L.canCheck ? 'Check' : (L.toCall >= p.stack ? `All in ${fmt(p.stack)}` : `Call ${fmt(L.toCall)}`);
+    const ds = denoms();
+    const actingFor = actor !== meId() && !isLocal();
+    return `
+      <div class="dockhead">
+        <span class="who">${isLocal() ? `${esc(p.name)}'s turn` : actingFor ? `Acting for ${esc(p.name)}` : 'Your turn'}${actingFor ? ' · <button class="link" id="b-stopact" style="display:inline;padding:0">stop</button>' : ''}</span>
+        <span class="mystack num"><small>Stack</small>${fmt(p.stack - staged)}</span>
+      </div>
+      <div class="betline" id="betline" aria-label="Betting line — drag or tap chips to add">
+        <div class="amt num">${fmt(staged)}<small>${staged ? (L.mine ? `+${fmt(L.mine)} already in = ${fmt(to)}` : 'tap pile to take back') : (L.toCall ? `${fmt(L.toCall)} to call` : 'drag chips here')}</small></div>
+        <button class="link" id="b-unstage" aria-label="Take back last chip" style="text-decoration:none">${pileHTML(staged, 5) || ''}</button>
+      </div>
+      <div class="rack" role="group" aria-label="Your chips">
+        ${ds.map((d) => `<button class="chip ${d.cls}" data-chip="${d.v}" ${d.v > p.stack - staged || ui.busy ? 'disabled' : ''} aria-label="Add ${d.v}">${shortNum(d.v)}</button>`).join('')}
+      </div>
+      <div class="quick">
+        <button data-q="min">Min</button><button data-q="half">½ pot</button><button data-q="pot">Pot</button><button data-q="all">All in</button>
+      </div>
+      <div class="acts">
+        <button class="btn ${ui.confirmFold ? 'danger' : 'ghost'}" id="b-fold" ${ui.busy ? 'disabled' : ''}>${ui.confirmFold ? 'Really fold?' : 'Fold'}</button>
+        <button class="btn" id="b-call" ${ui.busy ? 'disabled' : ''}>${callLabel}</button>
+        <button class="btn primary" id="b-raise" ${third.disabled || ui.busy ? 'disabled' : ''}>${third.label}</button>
+      </div>`;
+  }
+  const shortNum = (v) => v >= 1000 ? (v / 1000) + 'K' : String(v);
+
+  function showdownHTML() {
+    const h = S.hand;
+    const key = `${h.no}`;
+    if (ui.winKey !== key) { ui.winKey = key; ui.winners = h.pots.map(() => []); }
+    const ready = ui.winners.length === h.pots.length && ui.winners.every((w) => w.length);
+    return `
+      <div class="dockhead"><span class="who">Who won?</span><span class="note">Tap two to split</span></div>
+      <div class="pots">
+        ${h.pots.map((pot, i) => `
+          <div class="potpick">
+            <div class="h"><span>${h.pots.length > 1 ? (i === 0 ? 'Main pot' : 'Side pot ' + i) : 'Pot'}</span><span class="num">${fmt(pot.amount)}</span></div>
+            <div class="pickrow">${pot.eligible.map((id) => `<button class="pick ${ui.winners[i] && ui.winners[i].includes(id) ? 'on' : ''}" data-pot="${i}" data-win="${esc(id)}">${esc(nameOf(id))}</button>`).join('')}</div>
+          </div>`).join('')}
+      </div>
+      <button class="btn primary" id="b-award" ${!ready || ui.busy ? 'disabled' : ''}>Pay the winner${h.pots.length > 1 || ui.winners.some((w) => w.length > 1) ? 's' : ''}</button>`;
+  }
+
+  // ----- sheets -----
+  function sheetHTML() {
+    if (ui.sheet === 'menu') return wrapSheet(menuHTML());
+    if (ui.sheet === 'player') return wrapSheet(playerSheetHTML());
+    if (ui.sheet === 'add') return wrapSheet(`
+      <h3>Add player</h3>
+      <div class="field"><label for="in-add">Name</label><input id="in-add" maxlength="16" value="${esc(val('in-add', ''))}"></div>
+      <button class="btn primary" id="b-add-go">Add with ${fmt(S.settings.startingStack)}</button>`);
+    return '';
+  }
+  const wrapSheet = (inner) => `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true">${inner}<button class="btn ghost" id="b-close">Close</button></div></div>`;
+
+  function menuHTML() {
+    const host = amHost();
+    const rows = S.players.map((p) => {
+      const inBank = p.buyIns * S.settings.startingStack;
+      const live = S.hand && S.hand.seats.includes(p.id) ? (S.hand.committed[p.id] || 0) : 0;
+      const net = p.stack + live - inBank;
+      return `<tr><td>${esc(p.name)}</td><td>${p.buyIns}×</td><td class="num">${fmt(p.stack)}</td><td class="num ${net > 0 ? 'pos' : net < 0 ? 'neg' : ''}">${net > 0 ? '+' : ''}${fmt(net)}</td></tr>`;
+    }).join('');
+    const peer = backend.kind === 'peer';
+    return `
+      <h3>Table ${esc(S.code === 'HERE' ? '(one phone)' : S.code)}</h3>
+      ${!isLocal() ? `<p class="note" style="margin:0">Friends open ChipStack and join with code <b style="color:var(--bone)">${esc(S.code)}</b>.${peer ? ' Keep the host\'s phone awake with the app open.' : ''}</p>
+      <div class="grid2"><button class="btn small" id="b-copycode">Copy code</button>${peer ? '<button class="btn small" id="b-copylink">Copy invite link</button>' : ''}</div>` : ''}
+      <h3 style="font-size:18px">Ledger</h3>
+      <div style="overflow-x:auto"><table class="ledger"><thead><tr><th>Player</th><th>Buy-ins</th><th>Stack</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${host ? `
+      <h3 style="font-size:18px">Blinds and buy-in</h3>
+      <div class="row3">
+        <div class="field"><label for="in-s-stack">Buy-in</label><input id="in-s-stack" inputmode="numeric" value="${esc(val('in-s-stack', S.settings.startingStack))}"></div>
+        <div class="field"><label for="in-s-sb">Small</label><input id="in-s-sb" inputmode="numeric" value="${esc(val('in-s-sb', S.settings.sb))}"></div>
+        <div class="field"><label for="in-s-bb">Big</label><input id="in-s-bb" inputmode="numeric" value="${esc(val('in-s-bb', S.settings.bb))}"></div>
+      </div>
+      <div class="grid2"><button class="btn small" id="b-settings" ${S.hand ? 'disabled' : ''}>${S.hand ? 'Change after this hand' : 'Save blinds'}</button>
+      <button class="btn small" id="b-undo" ${!S.history || !S.history.length ? 'disabled' : ''}>Undo last action</button></div>` : ''}
+      <h3 style="font-size:18px">What happened</h3>
+      <div class="logbox">${S.log.slice().reverse().map((l) => `<div>${esc(l)}</div>`).join('') || '<div>Nothing yet.</div>'}</div>
+      <button class="btn ghost" id="b-leave">${isLocal() ? 'Back to start (table is saved)' : 'Back to start'}</button>`;
+  }
+
+  function playerSheetHTML() {
+    const p = P(ui.sheetPlayer);
+    if (!p) return '<h3>Player left</h3>';
+    const self = p.id === meId() || isLocal();
+    const host = amHost();
+    const inHand = S.hand && S.hand.seats.includes(p.id);
+    const between = !S.hand;
+    const parts = [`<h3>${esc(p.name)}</h3><p class="note" style="margin:0">Stack ${fmt(p.stack)} · ${p.buyIns} buy-in${p.buyIns > 1 ? 's' : ''}</p>`];
+    const btns = [];
+    if (between) {
+      btns.push(`<button class="btn small" data-pa="up">Move up a seat</button>`);
+      btns.push(`<button class="btn small" data-pa="down">Move down a seat</button>`);
+      if (S.buttonId !== p.id) btns.push(`<button class="btn small" data-pa="button">Give dealer button</button>`);
+    }
+    if (self || host) btns.push(`<button class="btn small" data-pa="sit">${p.sittingOut ? 'Back in next hand' : 'Sit out'}</button>`);
+    if ((self || host) && !inHand) btns.push(`<button class="btn small" data-pa="rebuy">Rebuy +${fmt(S.settings.startingStack)}</button>`);
+    parts.push(btns.length ? `<div class="grid2">${btns.join('')}</div>` : '<p class="note">Seat changes open up between hands.</p>');
+    if (host && between) {
+      parts.push(`<div class="field"><label for="in-adj">Set stack (fix mistakes)</label><input id="in-adj" inputmode="numeric" value="${esc(val('in-adj', p.stack))}"></div><button class="btn small" data-pa="adjust">Save stack</button>`);
+    }
+    if ((self || host) && !inHand) parts.push(`<button class="btn small ${ui.confirmRemove ? 'danger' : 'ghost'}" data-pa="remove">${ui.confirmRemove ? `Tap again to remove ${esc(p.name)}` : 'Remove from table'}</button>`);
+    return parts.join('');
+  }
+
+  // ---------------- wiring ----------------
+  function wireTable() {
+    $app.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => { draft[i.id] = i.value; }));
+    on('#b-menu', () => { ui.sheet = 'menu'; ['in-s-stack', 'in-s-sb', 'in-s-bb'].forEach((k) => delete draft[k]); render(); });
+    on('#b-add', () => { ui.sheet = 'add'; delete draft['in-add']; render(); setTimeout(() => { const i = document.getElementById('in-add'); if (i) i.focus(); }, 30); });
+    $app.querySelectorAll('.seat').forEach((el) => el.addEventListener('click', () => { ui.sheet = 'player'; ui.sheetPlayer = el.dataset.player; ui.confirmRemove = false; delete draft['in-adj']; render(); }));
+    on('#b-deal', () => send({ type: 'deal' }));
+    on('#b-rebuy-me', () => send({ type: 'rebuy' }));
+    on('#b-actfor', () => { ui.actFor = true; render(); });
+    on('#b-stopact', (e) => { e.stopPropagation(); ui.actFor = false; render(); });
+
+    // betting
+    const actor = S.hand && actorId();
+    if (actor && S.hand.street !== 'showdown') wireBetting(actor);
+
+    // showdown
+    $app.querySelectorAll('[data-win]').forEach((b) => b.addEventListener('click', () => {
+      const i = +b.dataset.pot; const id = b.dataset.win;
+      const w = ui.winners[i];
+      ui.winners[i] = w.includes(id) ? w.filter((x) => x !== id) : w.concat(id);
+      render();
+    }));
+    on('#b-award', () => send({ type: 'award', winners: ui.winners }));
+
+    // sheets
+    const scrim = document.getElementById('scrim');
+    if (scrim) scrim.addEventListener('click', (e) => { if (e.target === scrim) { ui.sheet = null; render(); } });
+    on('#b-close', () => { ui.sheet = null; render(); });
+    on('#b-leave', leaveToHome);
+    on('#b-undo', () => send({ type: 'undo' }));
+    on('#b-settings', () => send({ type: 'settings', startingStack: document.getElementById('in-s-stack').value, sb: document.getElementById('in-s-sb').value, bb: document.getElementById('in-s-bb').value }).then(() => toast('Blinds saved')));
+    on('#b-copycode', () => copy(S.code));
+    on('#b-copylink', () => copy(location.origin + location.pathname + '#' + S.code));
+    on('#b-add-go', addPlayer);
+    const addIn = document.getElementById('in-add');
+    if (addIn) addIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') addPlayer(); });
+    $app.querySelectorAll('[data-pa]').forEach((b) => b.addEventListener('click', () => playerAction(b.dataset.pa)));
+  }
+
+  async function addPlayer() {
+    const n = (document.getElementById('in-add').value || '').trim();
+    if (!n) return toast('Type a name first', true);
+    await send({ type: 'join', by: 'l' + T.rid(), name: n });
+    delete draft['in-add'];
+    ui.sheet = null; render();
+  }
+
+  function playerAction(kind) {
+    const id = ui.sheetPlayer;
+    const p = P(id);
+    if (!p) return;
+    const map = {
+      up: { type: 'move', player: id, dir: -1 },
+      down: { type: 'move', player: id, dir: 1 },
+      button: { type: 'button', player: id },
+      sit: { type: 'sitOut', player: id, value: !p.sittingOut },
+      rebuy: { type: 'rebuy', player: id },
+      adjust: { type: 'adjust', player: id, stack: (document.getElementById('in-adj') || {}).value },
+    };
+    if (kind === 'remove') {
+      if (!ui.confirmRemove) { ui.confirmRemove = true; render(); return; }
+      ui.confirmRemove = false; ui.sheet = null;
+      send({ type: 'leave', player: id }).then(() => { if (id === meId() && !isLocal()) leaveToHome(); });
+      return;
+    }
+    // in local mode, act as the player themselves
+    const a = map[kind];
+    if (isLocal() && (kind === 'sit' || kind === 'rebuy')) a.by = '*';
+    send(a);
+  }
+
+  function copy(text) {
+    const done = () => toast('Copied ' + text);
+    try { navigator.clipboard.writeText(text).then(done, () => toast('Code: ' + text)); }
+    catch (e) { toast('Code: ' + text); }
+  }
+
+  function wireBetting(actor) {
+    const h = S.hand;
+    const p = P(actor);
+    const L = E.legal(S, actor);
+    const stagedSum = () => ui.staged.reduce((t, v) => t + v, 0);
+    const base = { player: actor };
+    const setTo = (target) => {
+      const to = Math.max(L.minTo, Math.min(L.maxTo, target));
+      const amt = to - L.mine;
+      ui.staged = breakdown(amt).flatMap((d) => Array.from({ length: d.n }, () => d.v));
+      render();
+    };
+    const sb = S.settings.sb;
+    const roundTo = (n) => Math.round(n / sb) * sb;
+    $app.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', () => {
+      const q = b.dataset.q;
+      const potAfterCall = L.pot + L.toCall;
+      if (q === 'min') setTo(L.minTo);
+      if (q === 'half') setTo(h.currentBet + roundTo(potAfterCall / 2));
+      if (q === 'pot') setTo(h.currentBet + roundTo(potAfterCall));
+      if (q === 'all') setTo(L.maxTo);
+    }));
+    on('#b-unstage', () => { ui.staged.pop(); render(); });
+    on('#b-fold', () => {
+      if (L.canCheck && !ui.confirmFold) { ui.confirmFold = true; render(); return; }
+      ui.confirmFold = false;
+      send({ type: 'fold', ...base });
+    });
+    on('#b-call', () => send({ type: L.canCheck ? 'check' : 'call', ...base }));
+    on('#b-raise', () => {
+      const staged = stagedSum();
+      const to = L.mine + staged;
+      const allIn = staged === p.stack;
+      if (to === h.currentBet && L.toCall > 0) return send({ type: 'call', ...base });
+      if (to < h.currentBet && allIn) return send({ type: 'call', ...base });
+      if (to > h.currentBet && (to >= L.minTo || allIn)) return send({ type: 'raise', to, ...base });
+      setTo(L.minTo);
+    });
+
+    // chips: tap to add, or drag onto the betting line / pot
+    $app.querySelectorAll('[data-chip]').forEach((chip) => {
+      chip.addEventListener('pointerdown', (e) => startDrag(e, chip, +chip.dataset.chip, p.stack));
+      chip.addEventListener('click', (e) => { if (chip.dataset.dragged) { delete chip.dataset.dragged; return; } addChip(+chip.dataset.chip, p.stack); e.preventDefault(); });
+      chip.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addChip(+chip.dataset.chip, p.stack); } });
+    });
+  }
+
+  function addChip(v, stack) {
+    const sum = ui.staged.reduce((t, x) => t + x, 0);
+    if (sum + v > stack) return toast('Not enough chips', true);
+    ui.staged.push(v);
+    try { navigator.vibrate && navigator.vibrate(8); } catch (e) { /* ignore */ }
+    render();
+  }
+
+  function startDrag(e, chip, v, stack) {
+    if (chip.disabled) return;
+    const sx = e.clientX, sy = e.clientY;
+    let ghost = null;
+    const zones = () => [document.getElementById('betline'), document.getElementById('potzone')].filter(Boolean);
+    const overZone = (x, y) => zones().some((z) => { const r = z.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; });
+    const move = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!ghost && Math.hypot(dx, dy) > 8) {
+        ghost = chip.cloneNode(true);
+        ghost.classList.add('dragghost');
+        ghost.removeAttribute('data-chip');
+        document.body.appendChild(ghost);
+        chip.dataset.dragged = '1';
+      }
+      if (ghost) {
+        ghost.style.left = ev.clientX + 'px';
+        ghost.style.top = ev.clientY + 'px';
+        const bl = document.getElementById('betline');
+        if (bl) bl.classList.toggle('over', overZone(ev.clientX, ev.clientY));
+        ev.preventDefault();
+      }
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (!ghost) return;
+      ghost.remove();
+      const dy = ev.clientY - sy;
+      if (overZone(ev.clientX, ev.clientY) || dy < -60) addChip(v, stack);
+      else { const bl = document.getElementById('betline'); if (bl) bl.classList.remove('over'); }
+      setTimeout(() => { delete chip.dataset.dragged; }, 50);
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }
+
+  // keep open views across a republish
+  const start = () => boot();
+  if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start); else start();
+})();
+
+</script>
+
+</body>
+</html>

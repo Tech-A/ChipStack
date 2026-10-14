@@ -1,0 +1,12 @@
+{
+  "name": "chipstack",
+  "version": "0.1.0",
+  "description": "Phone-friendly virtual poker chips for real-card Texas Hold'em nights",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test test/",
+    "serve": "npx --yes serve docs"
+  },
+  "license": "MIT"
+}
