@@ -55,7 +55,7 @@ npm run serve       # serve docs/ locally
 
 1. Push this repo to GitHub.
 2. Settings → Pages → Deploy from branch → `main`, folder `/docs`.
-3. Share `https://<you>.github.io/chipstack/` — add `#CODE` to pre-fill a table code.
+3. Share `https://<you>.github.io/ChipStack/` (the path matches the repo name, capitals included) — add `#CODE` to pre-fill a table code.
 
 ## Known limits (MVP)
 
