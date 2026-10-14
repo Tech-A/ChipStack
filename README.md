@@ -26,7 +26,7 @@ The page picks a sync backend at runtime:
 | Where it runs | Backend | Notes |
 |---|---|---|
 | claude.ai artifact | Shared artifact database + live room pokes | Players need a claude.ai account with access to the artifact |
-| Anywhere else (GitHub Pages, any static host) | PeerJS (WebRTC) | The host's phone acts as the server: keep it awake with the page open |
+| Anywhere else (GitHub Pages, any static host) | Public MQTT brokers (EMQX, HiveMQ, Mosquitto) | The host's phone runs the game; messages go through all reachable brokers at once |
 | One-phone mode | Browser storage | No network needed |
 
 All backends run the same pure reducer (`src/engine.js`), so the rules are identical everywhere.
@@ -61,5 +61,5 @@ npm run serve       # serve docs/ locally
 
 - Trust-based: anyone at the table can deal or pay out a pot. It's for friends.
 - A short all-in raise reopens betting (strict rules say it shouldn't).
-- In PeerJS mode, if the host's phone sleeps the table pauses until it comes back;
+- In GitHub Pages mode, if the host's phone sleeps the table pauses until it comes back;
   the host's table is saved on their phone and resumes under the same code.

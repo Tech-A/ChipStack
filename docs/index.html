@@ -698,7 +698,7 @@ button { cursor: pointer; }
  *   onState(cb), online (Set of player ids, optional), close()
  *
  * - ClaudeBackend: when the page runs as a claude.ai artifact (shared db doc + room pokes)
- * - PeerBackend:   when hosted anywhere else (GitHub Pages) — host's phone is the server, via PeerJS
+ * - PeerBackend:   when hosted anywhere else (GitHub Pages) — host's phone runs the game, public MQTT brokers relay
  * - LocalBackend:  one phone for the whole table (pass-and-play), stored in this browser
  */
 (function (root) {
@@ -828,106 +828,173 @@ button { cursor: pointer; }
     return new Error((e && e.message) || 'Something went wrong syncing the table.');
   }
 
-  // ---------------- PeerJS backend (host phone is the server) ----------------
-  let peerLib = null;
-  function loadPeer() {
-    if (root.Peer) return Promise.resolve(root.Peer);
-    if (peerLib) return peerLib;
-    peerLib = new Promise((res, rej) => {
+  // ---------------- Broker backend (host phone runs the game, public MQTT brokers relay messages) ----------------
+  // Every device connects to several free public MQTT brokers at once and sends each message
+  // through all of them, so one broker being down doesn't break the table.
+  //   chipstack/v2/<CODE>/state   retained, published by the host: the latest table state
+  //   chipstack/v2/<CODE>/in      players -> host: hello, act, ping
+  //   chipstack/v2/<CODE>/to/<tab> host -> one player: welcome, ok, err
+  //   chipstack/v2/<CODE>/lock    retained: which tab is hosting, so a second host tab stands down
+  const BROKERS = [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt',
+    'wss://test.mosquitto.org:8081',
+  ];
+  const brokerList = () => root.CHIPSTACK_BROKERS || BROKERS; // tests point this at a local broker
+  const TOPIC = (code) => 'chipstack/v2/' + code;
+  let mqttLib = null;
+  function loadMqtt() {
+    if (root.mqtt) return Promise.resolve(root.mqtt);
+    if (mqttLib) return mqttLib;
+    mqttLib = new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js';
-      s.onload = () => res(root.Peer);
-      s.onerror = () => rej(new Error('Could not load the connection library. Check your internet.'));
+      s.src = 'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+      s.onload = () => res(root.mqtt);
+      s.onerror = () => { mqttLib = null; rej(new Error('Could not load the connection library. Check your internet.')); };
       document.head.appendChild(s);
     });
-    return peerLib;
+    return mqttLib;
   }
-  const PEER_PREFIX = 'chipstack-v1-';
-  // tests can point at a local PeerJS server via window.CHIPSTACK_PEER_OPTIONS
-  const peerOpts = () => Object.assign({ debug: 0 }, root.CHIPSTACK_PEER_OPTIONS || {});
+
+  class Relay {
+    // a bundle of broker connections that behaves like one pub/sub link
+    constructor(onMessage) { this.clients = []; this.onMessage = onMessage; this.subs = new Set(); }
+    async connect() {
+      const lib = await loadMqtt();
+      const tries = brokerList().map((url) => new Promise((res) => {
+        let done = false;
+        const c = lib.connect(url, {
+          clientId: 'cs_' + rid(), clean: true, keepalive: 30, connectTimeout: 7000,
+          reconnectPeriod: 2500, protocolVersion: 4,
+        });
+        c.on('connect', () => {
+          this.subs.forEach((t) => c.subscribe(t, { qos: 0 }));
+          if (!done) { done = true; res(c); }
+        });
+        c.on('message', (topic, payload) => {
+          let msg; try { msg = JSON.parse(payload.toString()); } catch (e) { return; }
+          this.onMessage(topic, msg);
+        });
+        c.on('error', () => {});
+        setTimeout(() => { if (!done) { done = true; res(c); } }, 8000); // keep trying in background
+      }));
+      this.clients = await Promise.all(tries);
+      if (!this.clients.some((c) => c.connected)) {
+        // give slow networks one more moment
+        await sleep(3000);
+        if (!this.clients.some((c) => c.connected)) { this.end(); throw new Error("Can't reach the game relay. Check your internet connection and try again."); }
+      }
+      return this;
+    }
+    sub(topic) { this.subs.add(topic); this.clients.forEach((c) => c.connected && c.subscribe(topic, { qos: 0 })); }
+    pub(topic, msg, retain) {
+      const body = JSON.stringify(msg);
+      this.clients.forEach((c) => { if (c.connected) c.publish(topic, body, { qos: 0, retain: !!retain }); });
+    }
+    get up() { return this.clients.some((c) => c.connected); }
+    end() { this.clients.forEach((c) => { try { c.end(true); } catch (e) { /* ignore */ } }); this.clients = []; this.subs.clear(); }
+  }
 
   class PeerBackend extends Emitter {
     constructor() {
       super();
       this.kind = 'peer';
-      // One identity per browser TAB (sessionStorage survives refresh), so two tabs or two
-      // friends on one browser get separate seats. The host hands out the final id on join.
+      // One identity per browser TAB (sessionStorage survives a refresh), so two tabs or two
+      // friends on one browser get separate seats. The host confirms the id on join.
       this.tab = sess.get('chipstack:tab') || rid();
       sess.set('chipstack:tab', this.tab);
       this.me = { id: sess.get('chipstack:pid') || ('p' + rid()) };
       sess.set('chipstack:pid', this.me.id);
       this.pending = new Map();
-      this.conns = new Set();
+      this.seen = new Set();
+      this.players = new Map(); // host: tab -> { pid, at }
     }
-    async init() { await loadPeer(); return this; }
-    async create(settings, name) {
-      for (let tries = 0; tries < 5; tries++) {
-        const code = makeCode();
-        try {
-          await this.host(code, E.newTable({ code, hostId: this.me.id, hostName: name, ...settings }));
-          return code;
-        } catch (e) { if (!/taken/.test(e.message)) throw e; }
-      }
-      throw new Error('Could not make a table code — try again.');
-    }
+    async init() { await loadMqtt(); return this; }
     hostedCodes() {
       try { return JSON.parse(store.get('chipstack:hosted') || '[]'); } catch (e) { return []; }
     }
-    host(code, state) {
+
+    async link(code) {
       this.close();
-      this.code = code; this.isHost = true;
-      return new Promise((res, rej) => {
-        const peer = new root.Peer(PEER_PREFIX + code, peerOpts());
-        this.peer = peer;
-        let opened = false;
-        peer.on('open', () => {
-          opened = true;
-          this.state = null;
-          this.push(state);
-          this.save();
-          res(code);
-        });
-        peer.on('error', (err) => {
-          if (!opened) {
-            if (err.type === 'unavailable-id') rej(new Error('Code taken'));
-            else rej(new Error('Could not start the table: ' + (err.type || err.message)));
-          }
-        });
-        peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
-        peer.on('connection', (conn) => {
-          conn.on('open', () => { this.conns.add(conn); });
-          conn.on('close', () => { this.conns.delete(conn); this.updateOnline(); });
-          conn.on('data', (msg) => {
-            if (!msg) return;
-            if (msg.t === 'hello') {
-              const want = typeof msg.pid === 'string' && /^p[a-z0-9]{6,30}$/.test(msg.pid) ? msg.pid : null;
-              let id = want;
-              if (!id || id === this.me.id) id = 'p' + rid();
-              for (const c of this.conns) {
-                if (c === conn || c.pid !== id) continue;
-                if (c.tab && c.tab === msg.tab) { try { c.close(); } catch (e) { /* stale link from the same tab */ } }
-                else id = 'p' + rid(); // another phone already uses this id
-              }
-              conn.pid = id; conn.tab = msg.tab;
-              conn.send({ t: 'welcome', pid: id });
-              conn.send({ t: 'state', state: this.state });
-              this.updateOnline();
-              return;
-            }
-            if (msg.t !== 'act' || !conn.pid) return;
-            try {
-              const next = E.reduce(this.state, { ...msg.action, by: conn.pid });
-              this.apply(next);
-              conn.send({ t: 'ok', rid: msg.rid });
-            } catch (e) { conn.send({ t: 'err', rid: msg.rid, msg: e.message }); }
-          });
-        });
+      this.code = code;
+      this.base = TOPIC(code);
+      this.retained = null;
+      this.relay = new Relay((topic, msg) => this.onMessage(topic, msg));
+      this.relay.sub(this.base + '/state');
+      this.relay.sub(this.base + '/to/' + this.tab);
+      this.relay.sub(this.base + '/lock');
+      await this.relay.connect();
+    }
+    waitForState(ms) {
+      return new Promise((res) => {
+        if (this.retained) return res(this.retained);
+        const t0 = Date.now();
+        const iv = setInterval(() => {
+          if (this.retained || Date.now() - t0 > ms) { clearInterval(iv); res(this.retained); }
+        }, 100);
       });
     }
-    updateOnline() {
-      const set = new Set([this.me.id]);
-      this.conns.forEach((c) => c.pid && set.add(c.pid));
-      this.setOnline(set);
+
+    onMessage(topic, msg) {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.id) { if (this.seen.has(msg.id)) return; this.seen.add(msg.id); if (this.seen.size > 500) this.seen = new Set([...this.seen].slice(-250)); }
+      if (topic === this.base + '/state') {
+        if (!msg.state || msg.state.code !== this.code) return;
+        if (!this.retained || (msg.state.version || 0) >= (this.retained.version || 0)) this.retained = msg.state;
+        if (!this.isHost) this.push(msg.state);
+        return;
+      }
+      if (topic === this.base + '/lock') {
+        if (this.isHost && msg.tab && msg.tab !== this.tab && msg.at > this.hostSince) {
+          this.isHost = false; this.stoodDown = true;
+          this.relay.sub(this.base + '/state');
+        }
+        return;
+      }
+      if (topic === this.base + '/to/' + this.tab) {
+        if (msg.t === 'welcome') {
+          this.me.id = msg.pid;
+          sess.set('chipstack:pid', msg.pid);
+          store.set('chipstack:seat:' + this.code, msg.pid);
+          if (this.welcomed) this.welcomed();
+          return;
+        }
+        const p = this.pending.get(msg.rid);
+        if (!p) return;
+        this.pending.delete(msg.rid);
+        msg.t === 'ok' ? p.res(this.state) : p.rej(new Error(msg.msg || 'Something went wrong'));
+        return;
+      }
+      if (topic === this.base + '/in' && this.isHost) this.hostHandle(msg);
+    }
+
+    // ----- host side -----
+    async create(settings, name) {
+      for (let tries = 0; tries < 5; tries++) {
+        const code = makeCode();
+        await this.link(code);
+        const existing = await this.waitForState(1500);
+        if (existing) continue; // code used before: pick another
+        this.becomeHost(E.newTable({ code, hostId: this.me.id, hostName: name, ...settings }));
+        return code;
+      }
+      throw new Error('Could not make a table code — try again.');
+    }
+    becomeHost(state) {
+      this.isHost = true;
+      this.hostSince = Date.now();
+      this.relay.sub(this.base + '/in');
+      this.relay.pub(this.base + '/lock', { id: rid(), tab: this.tab, at: this.hostSince }, true);
+      this.state = null;
+      this.apply(state);
+      clearInterval(this.onlineTimer);
+      this.onlineTimer = setInterval(() => this.updateOnline(), 5000);
+      this.updateOnline();
+    }
+    apply(next) {
+      this.push(next);
+      this.save();
+      this.relay.pub(this.base + '/state', { id: rid(), state: next }, true);
     }
     save() {
       if (!this.isHost || !this.state) return;
@@ -936,97 +1003,97 @@ button { cursor: pointer; }
       list.unshift(this.code);
       store.set('chipstack:hosted', JSON.stringify(list.slice(0, 5)));
     }
-    apply(next) {
-      this.push(next);
-      this.save();
-      this.conns.forEach((c) => { try { c.send({ t: 'state', state: next }); } catch (e) { /* ignore */ } });
+    reply(tab, msg) { this.relay.pub(this.base + '/to/' + tab, { id: rid(), ...msg }); }
+    hostHandle(msg) {
+      const tab = typeof msg.tab === 'string' ? msg.tab.slice(0, 40) : null;
+      if (!tab) return;
+      const now = Date.now();
+      const validPid = (p) => typeof p === 'string' && /^p[a-z0-9]{6,30}$/.test(p);
+      const takenByOther = (pid) => pid === this.me.id || [...this.players].some(([t, v]) => t !== tab && v.pid === pid && now - v.at < 45000);
+      if (msg.t === 'hello') {
+        let pid = validPid(msg.pid) ? msg.pid : 'p' + rid();
+        if (takenByOther(pid)) pid = 'p' + rid();
+        this.players.set(tab, { pid, at: now });
+        this.reply(tab, { t: 'welcome', pid });
+        this.relay.pub(this.base + '/state', { id: rid(), state: this.state }, true);
+        this.updateOnline();
+        return;
+      }
+      if (!validPid(msg.pid)) return;
+      const known = this.players.get(tab);
+      if (!known) {
+        if (takenByOther(msg.pid)) return this.reply(tab, { t: 'err', rid: msg.rid, msg: 'Rejoin the table to keep playing.' });
+        this.players.set(tab, { pid: msg.pid, at: now });
+      } else known.at = now;
+      const pid = this.players.get(tab).pid;
+      if (msg.t === 'ping') return;
+      if (msg.t !== 'act' || !msg.action) return;
+      try {
+        const next = E.reduce(this.state, { ...msg.action, by: pid });
+        this.apply(next);
+        this.reply(tab, { t: 'ok', rid: msg.rid });
+      } catch (e) { this.reply(tab, { t: 'err', rid: msg.rid, msg: e.message }); }
     }
+    updateOnline() {
+      const now = Date.now();
+      const set = new Set([this.me.id]);
+      this.players.forEach((v) => { if (now - v.at < 40000) set.add(v.pid); });
+      this.setOnline(set);
+    }
+
+    // ----- player side -----
     async open(code) {
       const saved = store.get('chipstack:host:' + code);
+      await this.link(code);
+      const live = await this.waitForState(2500);
       if (saved) {
+        // resume hosting from this phone's saved copy (or the relay's, if newer)
         const st = JSON.parse(saved);
-        const prevId = this.me.id;
-        if (st.hostId) { this.me.id = st.hostId; sess.set('chipstack:pid', st.hostId); }
-        try { return await this.host(code, st); }
-        catch (e) { this.me.id = prevId; sess.set('chipstack:pid', prevId); if (!/taken/.test(e.message)) throw e; }
+        const best = live && (live.version || 0) > (st.version || 0) ? live : st;
+        if (best.hostId) { this.me.id = best.hostId; sess.set('chipstack:pid', best.hostId); }
+        this.becomeHost(best);
+        return code;
       }
-      return this.join(code);
-    }
-    join(code) {
-      this.close();
-      this.code = code; this.isHost = false;
-      return new Promise((res, rej) => {
-        const peer = new root.Peer(peerOpts());
-        this.peer = peer;
+      if (!live) { this.close(); throw new Error(`No table with code ${code}. Check the code with the host.`); }
+      this.push(live);
+      await new Promise((res, rej) => {
         let settled = false;
-        const connect = () => {
-          const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
-          this.conn = conn;
-          conn.on('open', () => {
-            const seat = store.get('chipstack:seat:' + code);
-            conn.send({ t: 'hello', pid: seat || this.me.id, tab: this.tab });
-          });
-          conn.on('data', (msg) => {
-            if (!msg) return;
-            if (msg.t === 'welcome') {
-              this.me.id = msg.pid;
-              sess.set('chipstack:pid', msg.pid);
-              store.set('chipstack:seat:' + code, msg.pid);
-              this.setOnline(new Set([this.me.id]));
-              return;
-            }
-            if (msg.t === 'state') { this.push(msg.state); if (!settled) { settled = true; res(code); } }
-            else if (msg.t === 'ok' || msg.t === 'err') {
-              const p = this.pending.get(msg.rid);
-              if (!p) return;
-              this.pending.delete(msg.rid);
-              msg.t === 'ok' ? p.res(this.state) : p.rej(new Error(msg.msg));
-            }
-          });
-          conn.on('close', () => {
-            if (this.conn !== conn || this.closed) return;
-            this.setOnline(new Set());
-            setTimeout(() => { if (this.conn === conn && !this.closed) connect(); }, 2000);
-          });
-        };
-        peer.on('open', connect);
+        this.welcomed = () => { if (!settled) { settled = true; res(); } };
+        const hello = () => this.relay.pub(this.base + '/in', { id: rid(), t: 'hello', tab: this.tab, pid: store.get('chipstack:seat:' + code) || this.me.id });
+        hello();
+        const again = setInterval(() => { if (settled) clearInterval(again); else hello(); }, 2500);
         setTimeout(() => {
           if (settled) return;
-          settled = true;
-          rej(new Error("Couldn't reach the host's phone. Check the code, make sure the host has the app open, or try joining the same Wi-Fi."));
-          this.close();
-        }, 20000);
-        peer.on('error', (err) => {
-          if (err.type === 'peer-unavailable') {
-            if (!settled) { settled = true; rej(new Error(`No table with code ${code} is open. The host's phone needs the app open.`)); }
-            else setTimeout(() => !this.closed && connect(), 3000);
-          } else if (!settled) { settled = true; rej(new Error('Connection failed: ' + (err.type || err.message))); }
-        });
-        peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
-      });
+          settled = true; clearInterval(again);
+          rej(new Error("The table exists but the host's phone isn't connected. Ask the host to open the app."));
+        }, 12000);
+      }).catch((e) => { this.close(); throw e; });
+      clearInterval(this.pingTimer);
+      this.pingTimer = setInterval(() => this.relay.pub(this.base + '/in', { id: rid(), t: 'ping', tab: this.tab, pid: this.me.id }), 15000);
+      this.setOnline(new Set([this.me.id]));
+      return code;
     }
     submit(action) {
-      const a = { ...action, by: this.me.id };
       if (this.isHost) {
-        const next = E.reduce(this.state, a);
+        const next = E.reduce(this.state, { ...action, by: this.me.id });
         this.apply(next);
         return Promise.resolve(next);
       }
+      if (this.stoodDown) return Promise.reject(new Error('This table is being hosted from another tab.'));
       return new Promise((res, rej) => {
-        if (!this.conn || !this.conn.open) return rej(new Error('Reconnecting to the host…'));
+        if (!this.relay || !this.relay.up) return rej(new Error('Reconnecting…'));
         const id = rid();
         this.pending.set(id, { res, rej });
-        this.conn.send({ t: 'act', rid: id, action: a });
-        setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); rej(new Error('The host did not answer. Is their app open?')); } }, 8000);
+        this.relay.pub(this.base + '/in', { id: rid(), t: 'act', rid: id, tab: this.tab, pid: this.me.id, action });
+        setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); rej(new Error("The host didn't answer. Is the app open on their phone?")); } }, 9000);
       });
     }
     close() {
-      this.closed = true;
-      try { if (this.peer) this.peer.destroy(); } catch (e) { /* ignore */ }
-      this.peer = this.conn = null;
-      this.conns = new Set();
+      clearInterval(this.pingTimer); clearInterval(this.onlineTimer);
+      if (this.relay) this.relay.end();
+      this.relay = null; this.isHost = false; this.stoodDown = false; this.welcomed = null;
+      this.players = new Map(); this.retained = null;
       this.state = null;
-      this.closed = false;
     }
   }
 

@@ -1,8 +1,8 @@
-"""Multiplayer test of the GitHub Pages (PeerJS) build: one host + several friends on separate
-"phones" (browser contexts), through a local PeerJS server.
+"""Multiplayer test of the GitHub Pages build: one host + several friends on separate
+"phones" (browser contexts), relayed through a local MQTT broker (plus a dead one, to prove fallback).
 
-Setup (once):  npm install --prefix /tmp/peertest peer@1.0.2 peerjs@1.5.4 express
-Run:           python3 test/peer_smoke.py /tmp/peertest   (after `node build.js`)
+Setup (once):  npm install --prefix /tmp/nettest mqtt@5.10.1 aedes@0.51.3 websocket-stream@5.5.2
+Run:           python3 test/net_smoke.py /tmp/nettest [friends]   (after `node build.js`)
 """
 import pathlib, subprocess, sys, time, http.server, threading, functools
 from playwright.sync_api import sync_playwright
@@ -10,30 +10,29 @@ from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEPS = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '/tmp/peertest')
 N_FRIENDS = int(sys.argv[2]) if len(sys.argv) > 2 else 4
-PEERJS = (DEPS / 'node_modules/peerjs/dist/peerjs.min.js').read_bytes()
+MQTTJS = (DEPS / 'node_modules/mqtt/dist/mqtt.min.js').read_bytes()
 
 SERVER_JS = """
-const express = require('express'); const http = require('http'); const { ExpressPeerServer } = require('peer');
-const app = express(); const srv = http.createServer(app);
-app.use('/', ExpressPeerServer(srv, { path: '/' }));
-srv.listen(9123, '127.0.0.1');
+const aedes = require('aedes')(); const http = require('http'); const ws = require('websocket-stream');
+const srv = http.createServer(); ws.createServer({ server: srv }, aedes.handle);
+srv.listen(9124, '127.0.0.1');
 """
-(DEPS / 'server.js').write_text(SERVER_JS)
-server = subprocess.Popen(['node', str(DEPS / 'server.js')], cwd=str(DEPS), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+(DEPS / 'broker.js').write_text(SERVER_JS)
+server = subprocess.Popen(['node', str(DEPS / 'broker.js')], cwd=str(DEPS), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT / 'docs'))
 handler.log_message = lambda *a: None
 httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 8765), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 time.sleep(1.5)
 
-OPTS = "window.CHIPSTACK_PEER_OPTIONS = {host: '127.0.0.1', port: 9123, path: '/', secure: false, config: {iceServers: []}};"
+OPTS = "window.CHIPSTACK_BROKERS = ['ws://127.0.0.1:9124', 'ws://127.0.0.1:9199'];"
 errors, logs = [], []
 
 def phone(browser, label, ctx=None):
     if ctx is None:
         ctx = browser.new_context(viewport={'width': 390, 'height': 844})
         ctx.add_init_script(OPTS)
-        ctx.route('**/peerjs.min.js', lambda r: r.fulfill(body=PEERJS, content_type='application/javascript'))
+        ctx.route('**/mqtt.min.js', lambda r: r.fulfill(body=MQTTJS, content_type='application/javascript'))
         ctx.route('https://fonts.googleapis.com/**', lambda r: r.abort())
     pg = ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(f'{label}: {e}'))
@@ -86,6 +85,18 @@ try:
         time.sleep(1)
         assert acted, 'nobody had controls'
         print('action from a friend phone reached everyone:', host.locator('.seat .bet').count(), 'bets on host screen')
+        # host's phone reloads (e.g. screen locked, tab reopened) and resumes hosting
+        host.reload()
+        host.wait_for_selector('[data-resume]', timeout=15000)
+        host.click('[data-resume]')
+        host.wait_for_selector('.codepill', timeout=15000)
+        time.sleep(1)
+        # a friend acts after the host came back
+        for f in friends + [host]:
+            if f.locator('#b-call').count():
+                before = f.locator('#b-call').inner_text(); f.click('#b-call'); break
+        time.sleep(1.5)
+        print('after host resumed, a friend acted:', before, '| bets now on host screen:', host.locator('.seat .bet').count(), '| on Friend0:', friends[0].locator('.seat .bet').count())
         for i, f in enumerate(friends):
             print(f'Friend{i} sees seats:', f.locator('.seat').count(), '| hand:', f.locator('.top .meta').inner_text().split('\n')[0])
         browser.close()
