@@ -55,7 +55,7 @@
   }
 
   function addPlayer(s, id, name) {
-    const clean = String(name || '').trim().slice(0, 16) || 'Player';
+    const clean = String(name || '').trim().slice(0, 18) || 'Player';
     s.players.push({ id, name: clean, stack: s.settings.startingStack, buyIns: 1, sittingOut: false });
   }
 
@@ -155,6 +155,7 @@
       folded: {},
       allIn: {},
       acted: {},
+      last: {},
       currentBet: 0,
       minRaise: s.settings.bb,
       toAct: null,
@@ -163,6 +164,8 @@
     s.lastResult = null;
     const sbAmt = post(s, h, sbId, s.settings.sb);
     const bbAmt = post(s, h, bbId, s.settings.bb);
+    h.last[sbId] = 'Small blind';
+    h.last[bbId] = 'Big blind';
     h.currentBet = s.settings.bb; // a short blind still means others call the full big blind
     log(s, `Hand #${h.no}: ${nameOf(s, btn)} has the button. Blinds ${sbAmt}/${bbAmt}.`);
     h.toAct = firstToAct;
@@ -191,6 +194,7 @@
     // close the street
     h.bets = {};
     h.acted = {};
+    h.last = {};
     h.currentBet = 0;
     h.minRaise = s.settings.bb;
     const idx = STREETS.indexOf(h.street);
@@ -288,18 +292,22 @@
     const mine = h.bets[id] || 0;
     const toCall = h.currentBet - mine;
     const who = p.name;
+    let label = 'Waiting';
     switch (a.type) {
       case 'fold':
         h.folded[id] = true;
+        label = 'Folded';
         log(s, `${who} folds.`);
         break;
       case 'check':
         if (toCall > 0) fail(`Can't check — ${toCall} to call`);
+        label = 'Checked';
         log(s, `${who} checks.`);
         break;
       case 'call': {
         if (toCall <= 0) fail('Nothing to call — check instead');
         const amt = post(s, h, id, toCall);
+        label = 'Called';
         log(s, `${who} calls ${amt}${h.allIn[id] ? ' (all in)' : ''}.`);
         break;
       }
@@ -320,6 +328,7 @@
           h.acted = {};
         }
         h.currentBet = to;
+        label = wasBet ? 'Bet' : 'Raised';
         log(s, `${who} ${wasBet ? 'bets' : 'raises to'} ${to}${allIn ? ' (all in)' : ''}.`);
         break;
       }
@@ -327,6 +336,8 @@
         fail('Unknown action');
     }
     h.acted[id] = true;
+    if (!h.last) h.last = {};
+    h.last[id] = h.allIn[id] ? 'All in' : label;
     advance(s, id);
   }
 
@@ -346,7 +357,7 @@
     switch (a.type) {
       case 'join': {
         if (player(s, a.by)) {
-          if (a.name) player(s, a.by).name = String(a.name).trim().slice(0, 16) || player(s, a.by).name;
+          if (a.name) player(s, a.by).name = String(a.name).trim().slice(0, 18) || player(s, a.by).name;
           break;
         }
         if (s.players.length >= 10) fail('Table is full (10 players)');

@@ -1,12 +1,24 @@
 """Browser smoke test: two phones sharing a table through a fake claude db (localStorage-backed),
 plus the one-phone mode. Run: python3 test/ui_smoke.py  (needs `node build.js` first)."""
-import pathlib, sys, re
+import pathlib, sys, re, os
 from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 URL = (ROOT / 'docs' / 'index.html').as_uri()
 OUT = ROOT / 'test' / 'shots'
 OUT.mkdir(exist_ok=True)
+# Google Fonts may be unreachable from test machines: serve the same faces from @fontsource if installed.
+FONTS = pathlib.Path(os.environ.get('CHIPWRECK_FONTS', '/tmp/fonts')) / 'node_modules'
+FONT_CSS = None
+if (FONTS / '@fontsource/jersey-15').exists():
+    FONT_CSS = (
+        "@font-face{font-family:'Jersey 15';font-weight:400;src:url(https://fonts.gstatic.com/x/jersey.woff2) format('woff2')}"
+        "@font-face{font-family:'Archivo';font-weight:100 900;font-stretch:62% 125%;src:url(https://fonts.gstatic.com/x/archivo.woff2) format('woff2')}")
+    FONT_FILES = {'jersey.woff2': FONTS / '@fontsource/jersey-15/files/jersey-15-latin-400-normal.woff2',
+                  'archivo.woff2': FONTS / '@fontsource-variable/archivo/files/archivo-latin-standard-normal.woff2'}
+    if not FONT_FILES['archivo.woff2'].exists():
+        FONT_FILES['archivo.woff2'] = FONTS / '@fontsource-variable/archivo/files/archivo-latin-wght-normal.woff2'
+
 
 FAKE_CLAUDE = """
 (() => {
@@ -48,108 +60,138 @@ def phone(browser, uid=None):
     ctx_page.goto(URL)
     return ctx_page
 
-def stack_of(page, name):
-    row = page.locator('.seat', has_text=name)
-    return int(row.locator('.stack').inner_text().replace(',', ''))
+def money_in(page, sel):
+    return int(page.locator(sel).first.inner_text().replace('$', '').replace(',', '').split()[0])
 
+def seat_stack(page, name):
+    return int(page.locator('.seat', has_text=name).locator('.of').inner_text().replace('of $', '').replace(',', ''))
+
+def drag(page, src, dst):
+    a, b = page.locator(src).bounding_box(), page.locator(dst).bounding_box()
+    page.mouse.move(a['x'] + a['width'] / 2, a['y'] + a['height'] / 2)
+    page.mouse.down()
+    page.mouse.move(b['x'] + b['width'] / 2, b['y'] + b['height'] / 2, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(80)
+
+import atexit
+PAGES = []
 with sync_playwright() as p:
-    browser = p.chromium.launch()
+    browser = p.chromium.launch(proxy={'server': os.environ['HTTPS_PROXY']} if os.environ.get('HTTPS_PROXY') else None)
     ctx = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
     def mk(uid):
         pg = ctx.new_page()
+        if FONT_CSS:
+            pg.route('https://fonts.googleapis.com/**', lambda r: r.fulfill(body=FONT_CSS, content_type='text/css'))
+            pg.route('https://fonts.gstatic.com/x/*', lambda r: r.fulfill(body=FONT_FILES[r.request.url.rsplit('/', 1)[1]].read_bytes(), content_type='font/woff2'))
         pg.on('pageerror', lambda e: errors.append(f'{uid}: {e}'))
         if uid: pg.add_init_script(FAKE_CLAUDE % uid)
         pg.goto(URL)
+        pg.evaluate("""document.fonts.load('40px "Jersey 15"').then(() => document.fonts.load('16px Archivo'))""")
+        PAGES.append(pg)
         return pg
 
-    a = mk('alice')
-    a.fill('#in-name', 'Abbey')
-    a.click('#b-create')
-    a.wait_for_selector('.codepill')
-    code = a.locator('.codepill').inner_text().strip()
-    print('table code', code)
-    assert re.fullmatch(r'[A-Z0-9]{4}', code), code
+    try:
+      a = mk('alice')
+      a.wait_for_selector('#b-submit')
+      a.screenshot(path=str(OUT / '0-lobby-form.png'))
+      a.click('[data-a="tab"][data-v="create"]')
+      a.fill('#in-name', 'Abbey')
+      a.click('#b-submit')
+      a.wait_for_selector('.tiles')
+      code = ''.join(a.locator('.tiles div').all_inner_texts())
+      print('table code', code)
+      assert re.fullmatch(r'[A-Z0-9]{4}', code), code
 
-    b = mk('bob')
-    b.fill('#in-name', 'Sam')
-    b.fill('#in-code', code)
-    b.click('#b-join')
-    b.wait_for_selector('.seat:has-text("Sam")')
-    a.wait_for_selector('.seat:has-text("Sam")')
+      friends = []
+      for uid, name in [('bob', 'Sam'), ('cara', 'Kiri')]:
+          f = mk(uid)
+          f.fill('#in-name', name)
+          f.fill('#in-code', code)
+          f.click('#b-submit')
+          f.wait_for_selector('#b-seat')
+          a.wait_for_selector(f'.rp:has-text("{name}")')
+          friends.append(f)
+      b, c = friends
+      a.screenshot(path=str(OUT / '1-room.png'))
 
-    c = mk('cara')
-    c.fill('#in-name', 'Kiri')
-    c.fill('#in-code', code)
-    c.click('#b-join')
-    a.wait_for_selector('.seat:has-text("Kiri")')
-    a.screenshot(path=str(OUT / '1-lobby.png'))
+      a.click('#b-start')
+      # Abbey has the button, Sam SB, Kiri BB, Abbey acts first
+      a.wait_for_selector('#b-play')
+      b.wait_for_selector('#tbl')  # friends jump to the table when the game starts
+      a.wait_for_selector('#turnPill:has-text("YOUR TURN")')
+      for _ in range(3): a.click('[data-chip="10"]')
+      assert 'PLAY $30' in a.locator('#b-play').inner_text(), a.locator('#b-play').inner_text()
+      drag(a, '[data-chip="5"]', '#zone')
+      assert 'PLAY $35' in a.locator('#b-play').inner_text(), a.locator('#b-play').inner_text()
+      a.click('[data-zchip]:last-child')  # tap top chip to take it back
+      assert 'PLAY $30' in a.locator('#b-play').inner_text(), a.locator('#b-play').inner_text()
+      a.click('[data-chip="5"]')
+      a.screenshot(path=str(OUT / '2-my-turn.png'), full_page=True)
+      a.click('#b-play')
 
-    a.click('#b-deal')
-    # Abbey has the button, Sam SB, Kiri BB, Abbey acts first
-    a.wait_for_selector('#b-raise')
-    a.screenshot(path=str(OUT / '2-my-turn.png'))
-    # tap a chip a few times: 10 + 10 + 10 = raise to 30
-    chip10 = a.locator('[data-chip="10"]')
-    for _ in range(3): chip10.click()
-    assert 'Raise to 30' in a.locator('#b-raise').inner_text(), a.locator('#b-raise').inner_text()
-    # drag a 5 chip onto the betting line -> 35
-    box = a.locator('[data-chip="5"]').bounding_box()
-    line = a.locator('#betline').bounding_box()
-    a.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
-    a.mouse.down()
-    a.mouse.move(line['x'] + 40, line['y'] + 30, steps=8)
-    a.mouse.up()
-    a.wait_for_timeout(100)
-    assert 'Raise to 35' in a.locator('#b-raise').inner_text(), a.locator('#b-raise').inner_text()
-    a.screenshot(path=str(OUT / '3-staged.png'))
-    a.click('#b-raise')
+      b.wait_for_selector('#b-call:not([disabled]):has-text("CALL $30")')
+      b.click('#b-call')
+      c.wait_for_selector('#b-call:not([disabled]):has-text("CALL $25")')
+      c.click('#b-fold')
+      a.wait_for_selector('#streetPill:has-text("FLOP")')
+      print('flop reached; pot', a.locator('#potLabel span').inner_text())
+      assert a.locator('#potLabel span').inner_text() == '$80'
 
-    b.wait_for_selector('#b-call:has-text("Call 30")')
-    b.click('#b-call')
-    c.wait_for_selector('#b-call:has-text("Call 25")')
-    c.click('#b-fold')
-    a.wait_for_selector('.streets .on:has-text("FLOP")')
-    print('flop reached; pot', a.locator('.potzone .amt').inner_text())
-    assert a.locator('.potzone .amt').inner_text() == '80'
+      # flop: Sam checks, Abbey bets 80 with chips, Sam calls
+      b.wait_for_selector('#b-call:not([disabled]):has-text("CHECK")'); b.click('#b-call')
+      a.wait_for_selector('#turnPill:has-text("YOUR TURN")')
+      for v in [25, 25, 25, 5]: a.click(f'[data-chip="{v}"]')
+      a.click('#b-play')
+      b.wait_for_selector('#b-call:not([disabled]):has-text("CALL $80")'); b.click('#b-call')
+      for _ in range(2):
+          b.wait_for_selector('#b-call:not([disabled]):has-text("CHECK")'); b.click('#b-call')
+          a.wait_for_selector('#turnPill:has-text("YOUR TURN")'); a.click('#b-call')
+      a.wait_for_selector('[data-a="win1"]')
+      a.screenshot(path=str(OUT / '3-showdown.png'))
+      a.click('[data-a="win1"]:has-text("SAM")')
+      a.wait_for_selector('.mtitle:has-text("SAM TAKES IT")')
+      b.wait_for_selector('.mtitle:has-text("YOU TAKE IT")')
+      print('stacks: Sam', seat_stack(a, 'Sam'), 'Kiri', seat_stack(a, 'Kiri'), 'Abbey', a.locator('.mestack').inner_text())
+      assert seat_stack(a, 'Sam') == 1125 and seat_stack(a, 'Kiri') == 990 and a.locator('.mestack').inner_text() == '$885'
+      a.screenshot(path=str(OUT / '4-won.png'))
+      a.click('.modal [data-a="menu"]')
+      a.wait_for_selector('.ledger')
+      a.screenshot(path=str(OUT / '5-menu.png'))
+      a.click('[data-a="close-sheet"]')
+      a.click('#b-deal')
+      a.wait_for_selector('#hHand:has-text("HAND 2")')
+      # wider screens
+      for w, hgt, nm in [(1280, 800, 'desktop'), (900, 1000, 'tablet')]:
+          a.set_viewport_size({'width': w, 'height': hgt})
+          a.wait_for_timeout(400)
+          a.screenshot(path=str(OUT / f'6-table-{nm}.png'))
+      b.set_viewport_size({'width': 1280, 'height': 800})
+      b.wait_for_timeout(300)
+      b.screenshot(path=str(OUT / '7-table-desktop-sam.png'))
+      lob = mk(None); lob.set_viewport_size({'width': 1280, 'height': 800}); lob.wait_for_timeout(500)
+      lob.screenshot(path=str(OUT / '8-lobby-desktop.png'))
 
-    # flop: Sam checks, Abbey bets pot, Sam calls
-    b.wait_for_selector('#b-call:has-text("Check")')
-    b.click('#b-call')
-    a.wait_for_selector('#b-raise')
-    a.click('[data-q="pot"]')
-    a.click('#b-raise')
-    b.wait_for_selector('#b-call:has-text("Call 80")')
-    b.click('#b-call')
-    # turn + river check down
-    for _ in range(2):
-        b.wait_for_selector('#b-call:has-text("Check")'); b.click('#b-call')
-        a.wait_for_selector('#b-call:has-text("Check")'); a.click('#b-call')
-    a.wait_for_selector('#b-award')
-    a.screenshot(path=str(OUT / '4-showdown.png'))
-    a.click('[data-win]:has-text("Sam")')
-    a.click('#b-award')
-    a.wait_for_selector('.result')
-    a.wait_for_timeout(300)
-    print('stacks', stack_of(a, 'Abbey'), stack_of(a, 'Sam'), stack_of(a, 'Kiri'))
-    assert stack_of(a, "Sam") == 1125 and stack_of(a, "Abbey") == 885 and stack_of(a, "Kiri") == 990
-    a.screenshot(path=str(OUT / '5-result.png'))
-    a.click('#b-menu')
-    a.screenshot(path=str(OUT / '6-menu.png'))
-
-    # one-phone mode
-    d = mk(None)
-    d.fill('#in-name', 'Abbey')
-    d.click('#b-local')
-    d.wait_for_selector('#b-add')
-    for n in ['Sam', 'Kiri']:
-        d.click('#b-add'); d.fill('#in-add', n); d.click('#b-add-go')
-        d.wait_for_selector(f'.seat:has-text("{n}")')
-    d.click('#b-deal')
-    d.wait_for_selector('.dockhead:has-text("Abbey\'s turn")')
-    d.click('#b-fold'); d.wait_for_selector('.dockhead:has-text("Sam\'s turn")')
-    d.click('#b-fold')
-    d.wait_for_selector('.result:has-text("Kiri won 15")')
-    print('one-phone ok')
+      # one-phone mode
+      d = mk(None)
+      d.fill('#in-name', 'Abbey')
+      d.click('[data-a="local"]')
+      d.wait_for_selector('#in-add')
+      for n in ['Sam', 'Kiri']:
+          d.fill('#in-add', n); d.click('[data-a="add-player"]')
+          d.wait_for_selector(f'.rp:has-text("{n}")')
+      d.click('#b-start')
+      d.wait_for_selector('#turnPill:has-text("ABBEY")')
+      d.click('#b-fold'); d.wait_for_selector('#turnPill:has-text("SAM")')
+      d.click('#b-fold')
+      d.wait_for_selector('.mtitle:has-text("KIRI TAKES IT")')
+      assert d.locator('.mamt').inner_text() == '$15'
+      print('one-phone ok')
+    except Exception:
+        for i, pg in enumerate(PAGES):
+            try: pg.screenshot(path=str(OUT / f'fail-{i}.png'))
+            except Exception: pass
+        raise
     browser.close()
 
 if errors:

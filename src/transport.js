@@ -55,9 +55,9 @@
     ref(code) { return this.db.doc('tables/' + code); }
     async withLease(code, fn) {
       const ref = this.ref(code);
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 40; i++) {
         let r;
-        try { r = await ref.acquire({ holder: this.me.id + ':' + this.tab, ttlMs: 5000 }); }
+        try { r = await ref.acquire({ holder: this.me.id + ':' + this.tab, ttlMs: 1500 }); }
         catch (e) { if (e && e.code === 'unavailable') { await sleep(300); continue; } throw dbErr(e); }
         if (r && r.acquired) {
           const snap = await ref.get();

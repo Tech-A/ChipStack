@@ -150,3 +150,18 @@ test('short all-in big blind still lets others act', () => {
   s = go(s, 'b', 'call');
   assert.equal(s.hand.street, 'flop');
 });
+
+test('tracks each player\'s last action, reset each street', () => {
+  let s = go(table(), 'a', 'deal');
+  assert.equal(s.hand.last.b, 'Small blind');
+  assert.equal(s.hand.last.c, 'Big blind');
+  s = go(s, 'a', 'raise', { to: 30 });
+  assert.equal(s.hand.last.a, 'Raised');
+  s = go(s, 'b', 'call');
+  assert.equal(s.hand.last.b, 'Called');
+  s = go(s, 'c', 'fold');
+  assert.equal(s.hand.street, 'flop');
+  assert.deepEqual(s.hand.last, {});
+  s = go(s, 'b', 'raise', { to: 20 });
+  assert.equal(s.hand.last.b, 'Bet');
+});
