@@ -44,61 +44,52 @@ try:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         host = phone(browser, 'host')
+        host.click('[data-a="tab"][data-v="create"]')
         host.fill('#in-name', 'Abbey')
-        host.wait_for_selector('#b-create:not([disabled])')
-        host.click('#b-create')
-        host.wait_for_selector('.codepill', timeout=15000)
-        code = host.locator('.codepill').inner_text().strip()
+        host.click('#b-submit')
+        host.wait_for_selector('.tiles', timeout=15000)
+        code = ''.join(host.locator('.tiles div').all_inner_texts())
         print('code', code)
         friends = []
+        def join(f, name):
+            f.fill('#in-name', name); f.fill('#in-code', code); f.click('#b-submit')
+            f.wait_for_selector(f'.rp:has-text("{name} (you)")', timeout=15000)
         for i in range(N_FRIENDS):
             f = phone(browser, f'f{i}')
-            f.fill('#in-name', f'Friend{i}')
-            f.fill('#in-code', code)
-            f.wait_for_selector('#b-join:not([disabled])')
-            f.click('#b-join')
             try:
-                f.wait_for_selector(f'.seat:has-text("Friend{i}")', timeout=15000)
-                print(f'Friend{i} joined')
+                join(f, f'Friend{i}'); print(f'Friend{i} joined')
             except Exception:
-                print(f'Friend{i} FAILED; screen says:', f.locator('.err').inner_text() if f.locator('.err').count() else f.locator('body').inner_text()[:300])
+                print(f'Friend{i} FAILED; screen says:', f.locator('.errpill').inner_text() if f.locator('.errpill').count() else f.locator('body').inner_text()[:300])
             friends.append(f)
         # a second tab in the same browser as Friend0 must get its own seat
         same = phone(browser, 'sametab', ctx=friends[0].context)
-        same.fill('#in-name', 'SameBrowser'); same.fill('#in-code', code)
-        same.wait_for_selector('#b-join:not([disabled])'); same.click('#b-join')
-        same.wait_for_selector('.seat:has-text("SameBrowser")', timeout=15000)
-        assert same.locator('.seat:has-text("SameBrowser") .tag.you').count() == 1
-        assert friends[0].locator('.seat:has-text("Friend0") .tag.you').count() == 1
+        join(same, 'SameBrowser')
+        assert friends[0].locator('.rp:has-text("Friend0 (you)")').count() == 1
         print('second tab in same browser got its own seat')
         friends.append(same)
         time.sleep(1)
-        print('host sees seats:', host.locator('.seat').count())
-        host.click('#b-deal')
-        time.sleep(1.5)
-        print('dealt; players in hand per host:', host.evaluate("document.querySelectorAll('.tok.sb, .tok.bb').length"), 'blinds shown')
-        # whoever is first to act takes an action from their own phone
-        acted = False
-        for f in friends + [host]:
-            if f.locator('#b-call').count():
-                f.click('#b-call'); acted = True; break
-        time.sleep(1)
-        assert acted, 'nobody had controls'
-        print('action from a friend phone reached everyone:', host.locator('.seat .bet').count(), 'bets on host screen')
+        print('host sees seated:', host.locator('.rp').count())
+        host.click('#b-start')
+        for f in friends: f.wait_for_selector('#tbl', timeout=15000)
+        print('game started on every phone')
+        def act_once():
+            for f in friends + [host]:
+                if f.locator('#b-call:not([disabled])').count():
+                    label = f.locator('#b-call').inner_text(); f.click('#b-call'); return label
+        label = act_once(); time.sleep(1)
+        assert label, 'nobody had controls'
+        print('a phone acted:', label, '| host pot:', host.locator('#potLabel span').inner_text())
         # host's phone reloads (e.g. screen locked, tab reopened) and resumes hosting
         host.reload()
-        host.wait_for_selector('[data-resume]', timeout=15000)
-        host.click('[data-resume]')
-        host.wait_for_selector('.codepill', timeout=15000)
+        host.wait_for_selector('[data-a="rejoin"]', timeout=15000)
+        host.click('[data-a="rejoin"]')
+        host.wait_for_selector('#tbl', timeout=15000)
         time.sleep(1)
-        # a friend acts after the host came back
-        for f in friends + [host]:
-            if f.locator('#b-call').count():
-                before = f.locator('#b-call').inner_text(); f.click('#b-call'); break
-        time.sleep(1.5)
-        print('after host resumed, a friend acted:', before, '| bets now on host screen:', host.locator('.seat .bet').count(), '| on Friend0:', friends[0].locator('.seat .bet').count())
+        before = act_once(); time.sleep(1.5)
+        print('after host resumed, a phone acted:', before, '| host pot:', host.locator('#potLabel span').inner_text(), '| Friend0 pot:', friends[0].locator('#potLabel span').inner_text())
+        assert host.locator('#potLabel span').inner_text() == friends[0].locator('#potLabel span').inner_text()
         for i, f in enumerate(friends):
-            print(f'Friend{i} sees seats:', f.locator('.seat').count(), '| hand:', f.locator('.top .meta').inner_text().split('\n')[0])
+            print(f'Friend{i} sees others:', f.locator('.seat').count(), '|', f.locator('#hHand').inner_text())
         browser.close()
 finally:
     server.terminate(); httpd.shutdown()
